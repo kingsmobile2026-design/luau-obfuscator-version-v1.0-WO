@@ -1,0 +1,900 @@
+--[[
+    TSB Combined: Godmode + Invisibility + Attach
+    UI: 닉네임 입력 + Attach ON/OFF + Invis ON/OFF + Godmode ON/OFF
+]]
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local CoreGui = game:GetService("CoreGui")
+
+local LocalPlayer = Players.LocalPlayer
+
+-- //======= setPhysicsRep / sethiddenproperty 호환 =======//
+local _sethiddenproperty2
+if _sethiddenproperty then
+    _sethiddenproperty2 = _sethiddenproperty
+else
+    _sethiddenproperty2 = sethiddenproperty or set_hidden_property or set_hidden_prop
+end
+
+local function setPhysicsRep(part, root)
+    if not part then return end
+    local fn = _sethiddenproperty2 or sethiddenproperty or set_hidden_property or set_hidden_prop
+    if not fn then return end
+    pcall(fn, part, "PhysicsRepRootRef", root and InstanceHandle and InstanceHandle.new(root) or root)
+end
+
+pcall(function()
+    setfflag("S2PhysicsSenderRate", "25000000")
+end)
+
+-- //======= 색상 / 설정 =======//
+local Theme = {
+    Bg         = Color3.fromRGB(12, 12, 12),
+    Secondary  = Color3.fromRGB(24, 24, 24),
+    Border     = Color3.fromRGB(55, 55, 55),
+    On         = Color3.fromRGB(45, 180, 95),
+    Off        = Color3.fromRGB(190, 55, 65),
+    Text       = Color3.fromRGB(255, 255, 255),
+    SubText    = Color3.fromRGB(170, 170, 170),
+    Accent     = Color3.fromRGB(40, 120, 220),
+}
+
+local Config = {
+    GuiName = "TSB_GodInvisAttach",
+    TeleportDepth = -150,
+    AttachOffset = CFrame.new(0, 0, 6),
+}
+
+getgenv().AttachOffset = Config.AttachOffset
+
+-- //======= 유틸: 플레이어 찾기 (닉 / 표시닉 부분매칭, 2글자+) =======//
+local function findPlayer(query)
+    if type(query) ~= "string" then return nil end
+    query = query:gsub("^%s+", ""):gsub("%s+$", "")
+    if #query < 2 then return nil end
+
+    local qLower = query:lower()
+    local exact, partial = nil, nil
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr == LocalPlayer then continue end
+        local name = plr.Name:lower()
+        local display = (plr.DisplayName or ""):lower()
+
+        if name == qLower or display == qLower then
+            return plr
+        end
+        if name:find(qLower, 1, true) or display:find(qLower, 1, true) then
+            if not partial then
+                partial = plr
+            end
+        end
+    end
+    return exact or partial
+end
+
+-- //======= ATTACH 모듈 =======//
+local Attach = {
+    Enabled = false,
+    Target = nil,
+    TargetHRP = nil,
+    LocalHRP = nil,
+    Connection = nil,
+    CharConn = nil,
+}
+
+local function setupLocalChar(char)
+    if not char then return end
+    local hrp = char:WaitForChild("HumanoidRootPart", 8)
+    if hrp then
+        Attach.LocalHRP = hrp
+        pcall(setPhysicsRep, hrp, nil)
+    end
+end
+
+if LocalPlayer.Character then
+    task.spawn(setupLocalChar, LocalPlayer.Character)
+end
+LocalPlayer.CharacterAdded:Connect(setupLocalChar)
+
+RunService.Heartbeat:Connect(function()
+    if not Attach.Enabled then return end
+    if not Attach.TargetHRP or not Attach.TargetHRP.Parent then return end
+    if not Attach.LocalHRP or not Attach.LocalHRP.Parent then return end
+
+    pcall(function()
+        setPhysicsRep(Attach.LocalHRP, Attach.TargetHRP)
+        Attach.LocalHRP.CFrame = Attach.TargetHRP.CFrame * (getgenv().AttachOffset or Config.AttachOffset)
+    end)
+end)
+
+function Attach.Start(player)
+    if not player or not player:IsA("Player") then return false end
+
+    Attach.Stop()
+    Attach.Target = player
+    Attach.Enabled = true
+
+    if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+        Attach.TargetHRP = player.Character.HumanoidRootPart
+    end
+
+    Attach.CharConn = player.CharacterAdded:Connect(function(char)
+        local hrp = char:WaitForChild("HumanoidRootPart", 5)
+        if hrp then
+            Attach.TargetHRP = hrp
+        end
+    end)
+
+    if getgenv().addvape then
+        pcall(getgenv().addvape, "attach")
+    end
+    return true
+end
+
+function Attach.Stop()
+    Attach.Enabled = false
+    Attach.Target = nil
+    Attach.TargetHRP = nil
+
+    if Attach.CharConn then
+        Attach.CharConn:Disconnect()
+        Attach.CharConn = nil
+    end
+
+    if Attach.LocalHRP then
+        pcall(setPhysicsRep, Attach.LocalHRP, nil)
+    end
+
+    if getgenv().delvape then
+        pcall(getgenv().delvape, "attach")
+        pcall(getgenv().delvape, "at")
+        pcall(getgenv().delvape, "looptp")
+    end
+end
+
+function Attach.Toggle(player)
+    if Attach.Enabled then
+        Attach.Stop()
+        return false
+    else
+        return Attach.Start(player)
+    end
+end
+
+-- //======= INVIS 모듈 (순수 로직) =======//
+local Invis = {
+    Alive = true,
+    Enabled = false,
+    AnimationId = "rbxassetid://107114358965793",
+    AnimationTime = 18,
+    FadeTransparency = 0.5,
+}
+
+local invisConns = {}
+local invisDescConns = {}
+local transparencyCache = {}
+local invisChar, invisHum, invisHRP
+local invisAnim, invisTrack
+local invisBusy = false
+
+local function disconnectTable(t)
+    for k, c in pairs(t) do
+        pcall(function() c:Disconnect() end)
+        t[k] = nil
+    end
+end
+
+local function destroyInvisAnim()
+    if invisTrack then
+        pcall(function() invisTrack:Stop(0) end)
+        pcall(function() invisTrack:Destroy() end)
+        invisTrack = nil
+    end
+    if invisAnim then
+        pcall(function() invisAnim:Destroy() end)
+        invisAnim = nil
+    end
+end
+
+local function loadInvisAnim(humanoid)
+    if invisTrack and invisHum == humanoid then
+        return invisTrack
+    end
+    destroyInvisAnim()
+    local animator = humanoid:FindFirstChildWhichIsA("Animator")
+    if not animator then
+        animator = Instance.new("Animator")
+        animator.Parent = humanoid
+    end
+    invisAnim = Instance.new("Animation")
+    invisAnim.AnimationId = Invis.AnimationId
+    local ok, track = pcall(animator.LoadAnimation, animator, invisAnim)
+    if not ok or not track then
+        destroyInvisAnim()
+        return nil
+    end
+    track.Priority = Enum.AnimationPriority.Action4
+    invisTrack = track
+    return invisTrack
+end
+
+local function isHitbox(obj)
+    return obj.Name:lower():find("hitbox", 1, true) ~= nil
+end
+
+local function getOrigTransparency(obj)
+    if transparencyCache[obj] == nil then
+        transparencyCache[obj] = obj.Transparency
+    end
+    return transparencyCache[obj]
+end
+
+local function applyFade(obj)
+    if not invisHRP then return end
+    if obj:IsA("BasePart") then
+        if obj == invisHRP then return end
+        local orig = getOrigTransparency(obj)
+        if isHitbox(obj) or orig == 1 then
+            obj.Transparency = 1
+        else
+            obj.Transparency = Invis.FadeTransparency
+        end
+    elseif obj:IsA("Decal") or obj:IsA("Texture") then
+        local parent = obj.Parent
+        if parent and isHitbox(parent) then return end
+        if getOrigTransparency(obj) ~= 1 then
+            obj.Transparency = Invis.FadeTransparency
+        end
+    end
+end
+
+local function applyFadeAll(char)
+    for _, d in ipairs(char:GetDescendants()) do
+        applyFade(d)
+    end
+end
+
+local function refreshFade()
+    for obj, orig in pairs(transparencyCache) do
+        if not obj.Parent then
+            transparencyCache[obj] = nil
+        elseif obj:IsA("BasePart") then
+            if obj ~= invisHRP then
+                if isHitbox(obj) or orig == 1 then
+                    obj.Transparency = 1
+                else
+                    obj.Transparency = Invis.FadeTransparency
+                end
+            end
+        elseif obj:IsA("Decal") or obj:IsA("Texture") then
+            local parent = obj.Parent
+            if (not parent or not isHitbox(parent)) and orig ~= 1 then
+                obj.Transparency = Invis.FadeTransparency
+            end
+        end
+    end
+end
+
+local function restoreTransparency()
+    for obj, orig in pairs(transparencyCache) do
+        if obj.Parent then
+            pcall(function() obj.Transparency = orig end)
+        end
+        transparencyCache[obj] = nil
+    end
+end
+
+local function stopInvisTrack()
+    if invisTrack and invisTrack.IsPlaying then
+        pcall(function() invisTrack:Stop(0) end)
+    end
+end
+
+local function setupInvisChar(char)
+    disconnectTable(invisDescConns)
+    restoreTransparency()
+    destroyInvisAnim()
+    invisChar, invisHum, invisHRP = nil, nil, nil
+    if not char then return end
+
+    local hum = char:WaitForChild("Humanoid", 10)
+    local hrp = char:WaitForChild("HumanoidRootPart", 10)
+    if not Invis.Alive or LocalPlayer.Character ~= char or not hum or not hrp then
+        return
+    end
+    invisChar = char
+    invisHum = hum
+    invisHRP = hrp
+
+    invisDescConns.descendantAdded = char.DescendantAdded:Connect(function(d)
+        if Invis.Enabled then
+            task.defer(applyFade, d)
+        end
+    end)
+
+    if Invis.Enabled then
+        applyFadeAll(char)
+    end
+end
+
+local function invisHeartbeat()
+    if not Invis.Alive or not Invis.Enabled or invisBusy then return end
+    if not invisChar or not invisHum or not invisHRP then return end
+    if invisHum.Health <= 0 or not invisHRP.Parent then return end
+
+    invisBusy = true
+    refreshFade()
+    local track = loadInvisAnim(invisHum)
+
+    pcall(function()
+        if track then
+            if not track.IsPlaying then
+                track:Play(0)
+            end
+            track.TimePosition = Invis.AnimationTime
+            track:AdjustSpeed(0)
+            track:AdjustWeight(1, 0)
+        end
+        RunService.RenderStepped:Wait()
+    end)
+
+    stopInvisTrack()
+    invisBusy = false
+end
+
+function Invis.SetEnabled(state)
+    Invis.Enabled = state == true
+    if Invis.Enabled then
+        if invisChar then
+            applyFadeAll(invisChar)
+        end
+    else
+        stopInvisTrack()
+        restoreTransparency()
+    end
+    return Invis.Enabled
+end
+
+function Invis.Toggle()
+    return Invis.SetEnabled(not Invis.Enabled)
+end
+
+function Invis.Unload()
+    if not Invis.Alive then return end
+    Invis.Alive = false
+    Invis.Enabled = false
+    disconnectTable(invisDescConns)
+    disconnectTable(invisConns)
+    stopInvisTrack()
+    restoreTransparency()
+    destroyInvisAnim()
+    if getgenv().TSBInvisibility == Invis then
+        getgenv().TSBInvisibility = nil
+    end
+end
+
+invisConns.heartbeat = RunService.Heartbeat:Connect(invisHeartbeat)
+invisConns.characterAdded = LocalPlayer.CharacterAdded:Connect(function(c)
+    task.spawn(setupInvisChar, c)
+end)
+task.spawn(setupInvisChar, LocalPlayer.Character)
+getgenv().TSBInvisibility = Invis
+
+-- //======= GODMODE 모듈 =======//
+local God = {
+    Enabled = false,
+    Active = false,
+    LoopThread = nil,
+    HeartbeatConnection = nil,
+    GhostPart = nil,
+    UndergroundPlatform = nil,
+    SavedCFrame = nil,
+    Teleporting = false,
+}
+
+local SkillWhitelist = {
+    ["10469643643"] = true,
+    ["10471336737"] = true,
+    ["10469639222"] = true,
+    ["10468665991"] = true,
+    ["10469493270"] = true,
+    ["10466974800"] = true,
+    ["10479335397"] = true,
+    ["12510170988"] = true,
+    ["10469630950"] = true,
+}
+
+local function getChar()
+    return LocalPlayer.Character
+end
+
+local function getRoot()
+    local c = getChar()
+    if not c then return nil end
+    return c:FindFirstChild("PhysicsRootPart") or c:FindFirstChild("HumanoidRootPart")
+end
+
+local function createGhost()
+    if God.GhostPart then
+        pcall(function() God.GhostPart:Destroy() end)
+        God.GhostPart = nil
+    end
+    local p = Instance.new("Part")
+    p.Name = "GhostPart"
+    p.Anchored = false
+    p.CanCollide = false
+    p.Transparency = 1
+    p.Size = Vector3.new(0.1, 0.1, 0.1)
+    God.GhostPart = p
+    return p
+end
+
+local function destroyGhost()
+    if God.GhostPart then
+        pcall(function() God.GhostPart:Destroy() end)
+        God.GhostPart = nil
+    end
+end
+
+local function setRepToGhost()
+    local c = getChar()
+    if not c or not God.GhostPart then return end
+    pcall(function()
+        for _, d in ipairs(c:GetDescendants()) do
+            if d:IsA("BasePart") then
+                pcall(sethiddenproperty or set_hidden_property or function() end, d, "NetworkIsSleeping", false)
+                setPhysicsRep(d, God.GhostPart)
+            end
+        end
+    end)
+end
+
+local function clearRep()
+    local c = getChar()
+    if not c then return end
+    pcall(function()
+        for _, d in ipairs(c:GetDescendants()) do
+            if d:IsA("BasePart") then
+                setPhysicsRep(d, nil)
+            end
+        end
+    end)
+end
+
+local function createPlatform(cf)
+    if God.UndergroundPlatform and God.UndergroundPlatform.Parent then
+        God.UndergroundPlatform.CFrame = cf * CFrame.new(0, -5, 0)
+        return God.UndergroundPlatform
+    end
+    if God.UndergroundPlatform then
+        pcall(function() God.UndergroundPlatform:Destroy() end)
+        God.UndergroundPlatform = nil
+    end
+    local p = Instance.new("Part")
+    p.Name = "GodmodeSafetyPlatform"
+    p.Size = Vector3.new(100, 4, 100)
+    p.CFrame = cf * CFrame.new(0, -5, 0)
+    p.Anchored = true
+    p.CanCollide = true
+    p.Transparency = 1
+    p.Parent = workspace
+    God.UndergroundPlatform = p
+    return p
+end
+
+local function destroyPlatform()
+    if God.UndergroundPlatform then
+        pcall(function() God.UndergroundPlatform:Destroy() end)
+        God.UndergroundPlatform = nil
+    end
+end
+
+local function doTeleportCycle()
+    local char = getChar()
+    local root = getRoot()
+    if not root or not char then return end
+
+    if God.Teleporting then
+        if God.SavedCFrame and root.Position.Y <= God.SavedCFrame.Position.Y - 50 then
+            root.CFrame = God.SavedCFrame
+            root.AssemblyLinearVelocity = Vector3.zero
+        end
+        return
+    end
+
+    if not God.SavedCFrame or root.Position.Y > God.SavedCFrame.Position.Y - 50 then
+        God.SavedCFrame = root.CFrame
+    end
+
+    local under = God.SavedCFrame * CFrame.new(0, Config.TeleportDepth, 0)
+    createPlatform(under)
+    God.Teleporting = true
+
+    local fakePaused = getgenv().fakepos_enabled == true
+    if fakePaused then
+        getgenv().fakepos_pause = true
+        task.wait(0.12)
+    end
+
+    for _ = 1, 6 do
+        RunService.Stepped:Wait()
+        if God.Enabled then
+            root.CFrame = under
+            root.AssemblyLinearVelocity = Vector3.zero
+        else
+            break
+        end
+    end
+
+    task.wait(0.225)
+
+    if root and God.SavedCFrame then
+        for _ = 1, 6 do
+            RunService.Stepped:Wait()
+            root.CFrame = God.SavedCFrame
+            root.AssemblyLinearVelocity = Vector3.zero
+        end
+    end
+
+    God.Teleporting = false
+    if fakePaused then
+        getgenv().fakepos_pause = false
+    end
+end
+
+function God.Enable(skipTeleport)
+    if God.Enabled then return end
+    God.Enabled = true
+
+    if getgenv().addvape then
+        pcall(getgenv().addvape, "godmode")
+    end
+
+    createGhost()
+
+    if God.LoopThread then
+        task.cancel(God.LoopThread)
+        God.LoopThread = nil
+    end
+
+    God.LoopThread = task.spawn(function()
+        if not skipTeleport then
+            doTeleportCycle()
+        end
+        if not God.Enabled then return end
+        God.Active = true
+
+        if not God.HeartbeatConnection then
+            God.HeartbeatConnection = RunService.Heartbeat:Connect(function()
+                if not God.Active then return end
+                local root = getRoot()
+                if root and God.SavedCFrame and root.Position.Y <= God.SavedCFrame.Position.Y - 50 then
+                    root.CFrame = God.SavedCFrame
+                    root.AssemblyLinearVelocity = Vector3.zero
+                end
+                setRepToGhost()
+                RunService.RenderStepped:Wait()
+                clearRep()
+            end)
+        end
+    end)
+end
+
+function God.Disable()
+    God.Enabled = false
+    God.Active = false
+
+    if God.HeartbeatConnection then
+        God.HeartbeatConnection:Disconnect()
+        God.HeartbeatConnection = nil
+    end
+    if God.LoopThread then
+        task.cancel(God.LoopThread)
+        God.LoopThread = nil
+    end
+
+    God.Teleporting = false
+    clearRep()
+    destroyGhost()
+
+    local root = getRoot()
+    if root and God.SavedCFrame and root.Position.Y <= God.SavedCFrame.Position.Y - 50 then
+        root.CFrame = God.SavedCFrame
+        root.AssemblyLinearVelocity = Vector3.zero
+    end
+    destroyPlatform()
+
+    local char = getChar()
+    if char then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            pcall(function()
+                workspace.CurrentCamera.CameraSubject = hum
+            end)
+        end
+    end
+
+    if getgenv().delvape then
+        pcall(getgenv().delvape, "godmode")
+        pcall(getgenv().delvape, "godmodegui")
+    end
+end
+
+function God.Toggle()
+    if God.Enabled then
+        God.Disable()
+    else
+        God.Enable(false)
+    end
+end
+
+-- //======= UI =======//
+local function makeCorner(parent, radius)
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, radius or 6)
+    c.Parent = parent
+    return c
+end
+
+local function makeStroke(parent, color, thickness)
+    local s = Instance.new("UIStroke")
+    s.Color = color or Theme.Border
+    s.Thickness = thickness or 1
+    s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    s.Parent = parent
+    return s
+end
+
+-- 기존 GUI 제거
+pcall(function()
+    local old = CoreGui:FindFirstChild(Config.GuiName)
+    if old then old:Destroy() end
+    local old2 = LocalPlayer.PlayerGui:FindFirstChild(Config.GuiName)
+    if old2 then old2:Destroy() end
+end)
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = Config.GuiName
+ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.DisplayOrder = 999
+pcall(function() ScreenGui.Parent = CoreGui end)
+if not ScreenGui.Parent then
+    ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+end
+
+local Main = Instance.new("Frame")
+Main.Name = "Main"
+Main.Size = UDim2.fromOffset(260, 280)
+Main.Position = UDim2.new(0.5, -130, 0.75, 0)
+Main.BackgroundColor3 = Theme.Bg
+Main.BorderSizePixel = 0
+Main.Active = true
+Main.Draggable = true
+Main.Parent = ScreenGui
+makeCorner(Main, 10)
+makeStroke(Main, Theme.Border, 1)
+
+-- 타이틀
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, -16, 0, 28)
+Title.Position = UDim2.fromOffset(8, 6)
+Title.BackgroundTransparency = 1
+Title.Text = "TSB · God / Invis / Attach"
+Title.TextColor3 = Theme.Text
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 14
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Parent = Main
+
+-- 닫기 버튼
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size = UDim2.fromOffset(24, 24)
+CloseBtn.Position = UDim2.new(1, -30, 0, 6)
+CloseBtn.BackgroundColor3 = Theme.Secondary
+CloseBtn.Text = "×"
+CloseBtn.TextColor3 = Theme.Text
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.TextSize = 16
+CloseBtn.Parent = Main
+makeCorner(CloseBtn, 4)
+
+CloseBtn.MouseButton1Click:Connect(function()
+    ScreenGui.Enabled = not ScreenGui.Enabled
+end)
+
+-- 구분선
+local function sep(y)
+    local line = Instance.new("Frame")
+    line.Size = UDim2.new(1, -16, 0, 1)
+    line.Position = UDim2.fromOffset(8, y)
+    line.BackgroundColor3 = Theme.Border
+    line.BorderSizePixel = 0
+    line.Parent = Main
+    return line
+end
+
+sep(36)
+
+-- ===== Attach 섹션 =====
+local AttachLabel = Instance.new("TextLabel")
+AttachLabel.Size = UDim2.new(1, -16, 0, 18)
+AttachLabel.Position = UDim2.fromOffset(8, 44)
+AttachLabel.BackgroundTransparency = 1
+AttachLabel.Text = "Attach (닉 / 표시닉 2글자+)"
+AttachLabel.TextColor3 = Theme.SubText
+AttachLabel.Font = Enum.Font.Gotham
+AttachLabel.TextSize = 12
+AttachLabel.TextXAlignment = Enum.TextXAlignment.Left
+AttachLabel.Parent = Main
+
+local NameBox = Instance.new("TextBox")
+NameBox.Size = UDim2.new(1, -16, 0, 28)
+NameBox.Position = UDim2.fromOffset(8, 64)
+NameBox.BackgroundColor3 = Theme.Secondary
+NameBox.Text = ""
+NameBox.PlaceholderText = "닉네임 입력..."
+NameBox.PlaceholderColor3 = Color3.fromRGB(100, 100, 100)
+NameBox.TextColor3 = Theme.Text
+NameBox.Font = Enum.Font.Gotham
+NameBox.TextSize = 13
+NameBox.ClearTextOnFocus = false
+NameBox.Parent = Main
+makeCorner(NameBox, 6)
+makeStroke(NameBox, Theme.Border, 1)
+
+local AttachBtn = Instance.new("TextButton")
+AttachBtn.Size = UDim2.new(1, -16, 0, 30)
+AttachBtn.Position = UDim2.fromOffset(8, 98)
+AttachBtn.BackgroundColor3 = Theme.Off
+AttachBtn.Text = "○ Attach OFF"
+AttachBtn.TextColor3 = Theme.Text
+AttachBtn.Font = Enum.Font.GothamBold
+AttachBtn.TextSize = 13
+AttachBtn.Parent = Main
+makeCorner(AttachBtn, 6)
+
+local StatusLabel = Instance.new("TextLabel")
+StatusLabel.Size = UDim2.new(1, -16, 0, 16)
+StatusLabel.Position = UDim2.fromOffset(8, 130)
+StatusLabel.BackgroundTransparency = 1
+StatusLabel.Text = "대상: 없음"
+StatusLabel.TextColor3 = Theme.SubText
+StatusLabel.Font = Enum.Font.Gotham
+StatusLabel.TextSize = 11
+StatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+StatusLabel.Parent = Main
+
+sep(150)
+
+-- ===== Invis / Godmode 버튼 =====
+local InvisBtn = Instance.new("TextButton")
+InvisBtn.Size = UDim2.new(1, -16, 0, 32)
+InvisBtn.Position = UDim2.fromOffset(8, 160)
+InvisBtn.BackgroundColor3 = Theme.Off
+InvisBtn.Text = "○ Invisibility OFF"
+InvisBtn.TextColor3 = Theme.Text
+InvisBtn.Font = Enum.Font.GothamBold
+InvisBtn.TextSize = 13
+InvisBtn.Parent = Main
+makeCorner(InvisBtn, 6)
+
+local GodBtn = Instance.new("TextButton")
+GodBtn.Size = UDim2.new(1, -16, 0, 32)
+GodBtn.Position = UDim2.fromOffset(8, 200)
+GodBtn.BackgroundColor3 = Theme.Off
+GodBtn.Text = "○ Godmode OFF"
+GodBtn.TextColor3 = Theme.Text
+GodBtn.Font = Enum.Font.GothamBold
+GodBtn.TextSize = 13
+GodBtn.Parent = Main
+makeCorner(GodBtn, 6)
+
+-- 하단 힌트
+local Hint = Instance.new("TextLabel")
+Hint.Size = UDim2.new(1, -16, 0, 28)
+Hint.Position = UDim2.fromOffset(8, 240)
+Hint.BackgroundTransparency = 1
+Hint.Text = "드래그로 이동 · 닫기 후 다시 열려면 스크립트 재실행"
+Hint.TextColor3 = Theme.SubText
+Hint.Font = Enum.Font.Gotham
+Hint.TextSize = 10
+Hint.TextWrapped = true
+Hint.TextXAlignment = Enum.TextXAlignment.Left
+Hint.Parent = Main
+
+-- //======= UI 갱신 함수 =======//
+local function refreshUI()
+    -- Attach
+    if Attach.Enabled and Attach.Target then
+        AttachBtn.Text = "● Attach ON"
+        AttachBtn.BackgroundColor3 = Theme.On
+        StatusLabel.Text = "대상: " .. Attach.Target.Name .. " (" .. (Attach.Target.DisplayName or "") .. ")"
+        StatusLabel.TextColor3 = Theme.On
+    else
+        AttachBtn.Text = "○ Attach OFF"
+        AttachBtn.BackgroundColor3 = Theme.Off
+        StatusLabel.Text = "대상: 없음"
+        StatusLabel.TextColor3 = Theme.SubText
+    end
+
+    -- Invis
+    if Invis.Enabled then
+        InvisBtn.Text = "● Invisibility ON"
+        InvisBtn.BackgroundColor3 = Theme.On
+    else
+        InvisBtn.Text = "○ Invisibility OFF"
+        InvisBtn.BackgroundColor3 = Theme.Off
+    end
+
+    -- Godmode
+    if God.Enabled then
+        GodBtn.Text = "● Godmode ON"
+        GodBtn.BackgroundColor3 = Theme.On
+    else
+        GodBtn.Text = "○ Godmode OFF"
+        GodBtn.BackgroundColor3 = Theme.Off
+    end
+end
+
+-- //======= 버튼 이벤트 =======//
+AttachBtn.MouseButton1Click:Connect(function()
+    if Attach.Enabled then
+        Attach.Stop()
+        refreshUI()
+        return
+    end
+
+    local query = NameBox.Text
+    local target = findPlayer(query)
+    if not target then
+        StatusLabel.Text = "플레이어를 찾을 수 없음 (2글자 이상)"
+        StatusLabel.TextColor3 = Theme.Off
+        return
+    end
+
+    local ok = Attach.Start(target)
+    if ok then
+        refreshUI()
+    else
+        StatusLabel.Text = "Attach 실패"
+        StatusLabel.TextColor3 = Theme.Off
+    end
+end)
+
+InvisBtn.MouseButton1Click:Connect(function()
+    Invis.Toggle()
+    refreshUI()
+end)
+
+GodBtn.MouseButton1Click:Connect(function()
+    God.Toggle()
+    refreshUI()
+end)
+
+-- 대상이 나갔을 때 정리
+Players.PlayerRemoving:Connect(function(plr)
+    if Attach.Target == plr then
+        Attach.Stop()
+        refreshUI()
+    end
+end)
+
+-- 초기 UI
+refreshUI()
+
+-- 외부에서 제어할 수 있도록 노출
+getgenv().TSB_Combined = {
+    Attach = Attach,
+    Invis = Invis,
+    God = God,
+    RefreshUI = refreshUI,
+    FindPlayer = findPlayer,
+    Gui = ScreenGui,
+}
+
+print("[TSB Combined] Godmode + Invis + Attach UI loaded")
