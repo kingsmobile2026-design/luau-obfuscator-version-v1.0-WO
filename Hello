@@ -1127,24 +1127,13 @@ local TPA = {
     Running = false,
     Thread = nil,
     Settings = {
-        delay = 0.05,           -- 더 빠르게 (기존 0.3 → 0.05)
+        delay = 0.3,            -- 대상당 대기 시간
         excludeSelf = true,
         randomOrder = false,
-        tpDir = "behind",       -- behind / front / side
-        ox = 0, oy = 0, oz = 0,
-        voidY = -499,           -- 공허 높이
+        voidY = -100000,        -- 공허 높이
         voidDuration = 1,       -- 공허에 머무는 시간 (초)
     }
 }
-
-local function getTPOffset()
-    local ox, oy, oz = TPA.Settings.ox, TPA.Settings.oy, TPA.Settings.oz
-    if TPA.Settings.tpDir == "behind" then oz = oz + 2
-    elseif TPA.Settings.tpDir == "front" then oz = oz - 2
-    elseif TPA.Settings.tpDir == "side" then ox = ox + 2
-    end
-    return CFrame.new(ox, oy, oz)
-end
 
 function TPA.Start()
     if TPA.Running then
@@ -1155,7 +1144,7 @@ function TPA.Start()
     TPA.Running = true
     getgenv().TpaRunning = true
     if getgenv().addvape then pcall(getgenv().addvape, "teleportallgui") end
-    notify("TPA", "Teleport All 시작 (고속)", 2)
+    notify("TPA", "Teleport All 시작", 2)
 
     TPA.Thread = task.spawn(function()
         -- 시작 위치 저장 (나중에 공허 후 복귀용)
@@ -1188,10 +1177,9 @@ function TPA.Start()
             end
         end
 
-        local offset = getTPOffset()
-        local delay = TPA.Settings.delay > 0 and TPA.Settings.delay or 0.05
+        local delay = TPA.Settings.delay > 0 and TPA.Settings.delay or 0.3
 
-        -- 순차 텔레포트 (고속)
+        -- 순차 텔레포트 (완벽 동기화 → 0.3초 대기 → 다음)
         for i, plr in ipairs(list) do
             if not TPA.Running then break end
             local myChar = LocalPlayer.Character
@@ -1200,9 +1188,11 @@ function TPA.Start()
             local theirHRP = theirChar and theirChar:FindFirstChild("HumanoidRootPart")
 
             if myHRP and theirHRP then
+                -- 완벽 동기화 (오프셋 없음)
                 setPhysicsRep(myHRP, theirHRP)
-                myHRP.CFrame = theirHRP.CFrame * offset
-                myHRP.AssemblyLinearVelocity = Vector3.zero
+                myHRP.CFrame = theirHRP.CFrame
+                myHRP.AssemblyLinearVelocity = theirHRP.AssemblyLinearVelocity
+                myHRP.AssemblyAngularVelocity = Vector3.zero
                 task.wait(delay)
                 setPhysicsRep(myHRP, nil)
             end
@@ -1214,31 +1204,28 @@ function TPA.Start()
             return
         end
 
-        -- ===== 전부 완료 후: 공허 1초 → 안티보이드 자동 ON → 복귀 =====
+        -- ===== 전부 완료 후: 공허(-100000) → 안티보이드 자동 ON → 복귀 =====
         notify("TPA", "전원 이동 완료 → 공허 진입", 1.5)
 
         local myChar = LocalPlayer.Character
         local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
         if myHRP then
-            -- 복귀 위치 갱신 (마지막 위치)
             if not returnCF then
                 returnCF = myHRP.CFrame
             end
 
             -- 안티보이드 자동 켜기
-            local antiVoidWasOff = not AntiVoid.Enabled
-            if antiVoidWasOff then
+            if not AntiVoid.Enabled then
                 AntiVoid.Start()
                 notify("TPA", "안티보이드 자동 ON", 1)
             end
 
-            -- 공허로 이동
-            local voidY = TPA.Settings.voidY or -499
-            myHRP.CFrame = CFrame.new(myHRP.Position.X, voidY, myHRP.Position.Z)
+            -- 공허로 이동 (Y = -100000)
+            local voidY = TPA.Settings.voidY or -100000
+            myHRP.CFrame = CFrame.new(0, voidY, 0)
             myHRP.AssemblyLinearVelocity = Vector3.zero
             myHRP.AssemblyAngularVelocity = Vector3.zero
 
-            -- 공허에서 대기
             local voidDur = TPA.Settings.voidDuration or 1
             task.wait(voidDur)
 
@@ -1307,8 +1294,8 @@ end
 
 local Main = Instance.new("Frame")
 Main.Name = "Main"
-Main.Size = UDim2.fromOffset(270, 600)
-Main.Position = UDim2.new(0.5, -135, 0.5, -300)
+Main.Size = UDim2.fromOffset(340, 600)
+Main.Position = UDim2.new(0.5, -170, 0.5, -300)
 Main.BackgroundColor3 = Theme.Bg
 Main.BorderSizePixel = 0
 Main.Active = true
