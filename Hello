@@ -930,7 +930,7 @@ local TPA = {
         excludeSelf = true,
         randomOrder = false,
         voidY = -100,
-        voidDuration = 1.2,
+        voidDuration = 5,
     }
 }
 
