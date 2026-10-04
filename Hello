@@ -1,6 +1,9 @@
 --[[
-    TSB Combined: Godmode + Invisibility + Attach
-    UI: 닉네임 입력 + Attach ON/OFF + Invis ON/OFF + Godmode ON/OFF
+    TSB Combined v2
+    Godmode + Invisibility + Attach + Anti-Void
+    + LoopFling + Stand + TeleportAll (TPA)
+
+    UI: 닉네임 입력 + 각종 토글
 ]]
 
 local Players = game:GetService("Players")
@@ -8,6 +11,7 @@ local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local CoreGui = game:GetService("CoreGui")
+local HttpService = game:GetService("HttpService")
 
 local LocalPlayer = Players.LocalPlayer
 
@@ -23,7 +27,16 @@ local function setPhysicsRep(part, root)
     if not part then return end
     local fn = _sethiddenproperty2 or sethiddenproperty or set_hidden_property or set_hidden_prop
     if not fn then return end
-    pcall(fn, part, "PhysicsRepRootRef", root and InstanceHandle and InstanceHandle.new(root) or root)
+
+    local ref = root
+    if root ~= nil and type(InstanceHandle) == "table" and type(InstanceHandle.new) == "function" then
+        local ok, handle = pcall(InstanceHandle.new, root)
+        if ok and handle then ref = handle end
+    end
+
+    pcall(fn, part, "NetworkOwner", LocalPlayer)
+    pcall(fn, part, "NetworkOwnershipRule", Enum.NetworkOwnership.Manual)
+    pcall(fn, part, "PhysicsRepRootRef", ref)
 end
 
 pcall(function()
@@ -40,24 +53,26 @@ local Theme = {
     Text       = Color3.fromRGB(255, 255, 255),
     SubText    = Color3.fromRGB(170, 170, 170),
     Accent     = Color3.fromRGB(40, 120, 220),
+    Purple     = Color3.fromRGB(140, 80, 220),
+    Orange     = Color3.fromRGB(220, 140, 40),
 }
 
 local Config = {
-    GuiName = "TSB_GodInvisAttach",
+    GuiName = "TSB_Combined_v2",
     TeleportDepth = -150,
     AttachOffset = CFrame.new(0, 0, 6),
 }
 
 getgenv().AttachOffset = Config.AttachOffset
 
--- //======= 유틸: 플레이어 찾기 (닉 / 표시닉 부분매칭, 2글자+) =======//
+-- //======= 유틸: 플레이어 찾기 =======//
 local function findPlayer(query)
     if type(query) ~= "string" then return nil end
     query = query:gsub("^%s+", ""):gsub("%s+$", "")
     if #query < 2 then return nil end
 
     local qLower = query:lower()
-    local exact, partial = nil, nil
+    local partial = nil
 
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr == LocalPlayer then continue end
@@ -73,8 +88,112 @@ local function findPlayer(query)
             end
         end
     end
-    return exact or partial
+    return partial
 end
+
+local function notify(title, text, duration)
+    if typeof(getgenv().notify) == "function" then
+        getgenv().notify(title, text, duration)
+    else
+        print("[" .. tostring(title) .. "] " .. tostring(text))
+    end
+end
+
+-- //======= WHITELIST 모듈 (재접 시 초기화) =======//
+local Whitelist = {
+    List = {},          -- [UserId] = Player
+    ShowList = false,   -- 목록 UI ON/OFF
+}
+
+function Whitelist.Add(playerOrName)
+    local plr = typeof(playerOrName) == "Instance" and playerOrName:IsA("Player") and playerOrName
+        or findPlayer(tostring(playerOrName))
+    if not plr then
+        notify("Whitelist", "플레이어를 찾을 수 없습니다 (2글자+)", 2)
+        return false
+    end
+    if plr == LocalPlayer then
+        notify("Whitelist", "자기 자신은 등록할 수 없습니다", 2)
+        return false
+    end
+    if Whitelist.List[plr.UserId] then
+        notify("Whitelist", plr.Name .. " 님은 이미 등록되어 있습니다", 2)
+        return false
+    end
+    Whitelist.List[plr.UserId] = plr
+    notify("Whitelist", plr.Name .. " (" .. (plr.DisplayName or "") .. ") 화이트리스트 등록", 2)
+    return true
+end
+
+function Whitelist.Remove(playerOrName)
+    local plr = typeof(playerOrName) == "Instance" and playerOrName:IsA("Player") and playerOrName
+        or findPlayer(tostring(playerOrName))
+    if not plr then return false end
+    if Whitelist.List[plr.UserId] then
+        Whitelist.List[plr.UserId] = nil
+        notify("Whitelist", plr.Name .. " 화이트리스트 해제", 2)
+        return true
+    end
+    return false
+end
+
+function Whitelist.IsWhitelisted(player)
+    if not player then return false end
+    return Whitelist.List[player.UserId] ~= nil
+end
+
+function Whitelist.GetNames()
+    local names = {}
+    for _, plr in pairs(Whitelist.List) do
+        if plr and plr.Parent == Players then
+            table.insert(names, plr.DisplayName .. " (@" .. plr.Name .. ")")
+        end
+    end
+    table.sort(names)
+    return names
+end
+
+function Whitelist.Clear()
+    Whitelist.List = {}
+    notify("Whitelist", "화이트리스트 초기화됨", 2)
+end
+
+-- 채팅 명령: .화이트 닉네임
+local function onChatted(msg)
+    if type(msg) ~= "string" then return end
+    local trimmed = msg:gsub("^%s+", ""):gsub("%s+$", "")
+    local name = trimmed:match("^%.화이트%s+(.+)$") or trimmed:match("^%.white%s+(.+)$")
+    if name then
+        name = name:gsub("^%s+", ""):gsub("%s+$", "")
+        if #name >= 2 then
+            Whitelist.Add(name)
+        else
+            notify("Whitelist", "닉네임은 2글자 이상 입력해주세요", 2)
+        end
+    end
+end
+
+pcall(function()
+    LocalPlayer.Chatted:Connect(onChatted)
+end)
+pcall(function()
+    local TextChatService = game:GetService("TextChatService")
+    if TextChatService and TextChatService.MessageReceived then
+        TextChatService.MessageReceived:Connect(function(msg)
+            local src = msg.TextSource
+            if src and src.UserId == LocalPlayer.UserId then
+                onChatted(msg.Text)
+            end
+        end)
+    end
+end)
+
+-- 퇴장 시 목록에서 제거
+Players.PlayerRemoving:Connect(function(plr)
+    if Whitelist.List[plr.UserId] then
+        Whitelist.List[plr.UserId] = nil
+    end
+end)
 
 -- //======= ATTACH 모듈 =======//
 local Attach = {
@@ -82,16 +201,21 @@ local Attach = {
     Target = nil,
     TargetHRP = nil,
     LocalHRP = nil,
-    Connection = nil,
+    Humanoid = nil,
     CharConn = nil,
+    VoidHeight = -50,
+    SafePosition = Vector3.new(0, 50, 0)
 }
 
 local function setupLocalChar(char)
     if not char then return end
-    local hrp = char:WaitForChild("HumanoidRootPart", 8)
-    if hrp then
-        Attach.LocalHRP = hrp
-        pcall(setPhysicsRep, hrp, nil)
+    Attach.LocalHRP = char:WaitForChild("HumanoidRootPart", 5)
+    Attach.Humanoid = char:WaitForChild("Humanoid", 5)
+    if Attach.LocalHRP then
+        setPhysicsRep(Attach.LocalHRP, nil)
+    end
+    if Attach.Enabled and Attach.Target then
+        Attach.Start(Attach.Target)
     end
 end
 
@@ -100,38 +224,88 @@ if LocalPlayer.Character then
 end
 LocalPlayer.CharacterAdded:Connect(setupLocalChar)
 
-RunService.Heartbeat:Connect(function()
-    if not Attach.Enabled then return end
-    if not Attach.TargetHRP or not Attach.TargetHRP.Parent then return end
+local function executeAttachLoop()
     if not Attach.LocalHRP or not Attach.LocalHRP.Parent then return end
 
-    pcall(function()
-        setPhysicsRep(Attach.LocalHRP, Attach.TargetHRP)
-        Attach.LocalHRP.CFrame = Attach.TargetHRP.CFrame * (getgenv().AttachOffset or Config.AttachOffset)
-    end)
-end)
-
-function Attach.Start(player)
-    if not player or not player:IsA("Player") then return false end
-
-    Attach.Stop()
-    Attach.Target = player
-    Attach.Enabled = true
-
-    if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
-        Attach.TargetHRP = player.Character.HumanoidRootPart
+    if not Attach.TargetHRP or not Attach.TargetHRP.Parent then
+        if Attach.Target and Attach.Target.Character then
+            Attach.TargetHRP = Attach.Target.Character:FindFirstChild("HumanoidRootPart")
+        end
     end
 
-    Attach.CharConn = player.CharacterAdded:Connect(function(char)
-        local hrp = char:WaitForChild("HumanoidRootPart", 5)
-        if hrp then
-            Attach.TargetHRP = hrp
+    if Attach.TargetHRP and Attach.TargetHRP.Parent then
+        local tPos = Attach.TargetHRP.Position
+        if math.isfinite(tPos.X) and math.isfinite(tPos.Y) and math.isfinite(tPos.Z) then
+            if tPos.Y > Attach.VoidHeight then
+                Attach.SafePosition = tPos + Vector3.new(0, 10, 0)
+            end
+        end
+    end
+
+    if Attach.LocalHRP.Position.Y < Attach.VoidHeight then
+        Attach.LocalHRP.CFrame = CFrame.new(Attach.SafePosition)
+        Attach.LocalHRP.AssemblyLinearVelocity = Vector3.zero
+        return
+    end
+
+    if not Attach.Enabled or not Attach.Target or not Attach.TargetHRP or not Attach.TargetHRP.Parent then
+        return
+    end
+
+    Attach.LocalHRP.CanCollide = true
+    Attach.TargetHRP.CanCollide = true
+
+    pcall(function()
+        if sethiddenproperty then
+            sethiddenproperty(LocalPlayer, "MaximumSimulationRadius", 100000)
+            sethiddenproperty(LocalPlayer, "SimulationRadius", 100000)
+            sethiddenproperty(Attach.LocalHRP, "NetworkIsSleeping", false)
         end
     end)
 
-    if getgenv().addvape then
-        pcall(getgenv().addvape, "attach")
+    setPhysicsRep(Attach.LocalHRP, Attach.TargetHRP)
+
+    local targetCF = Attach.TargetHRP.CFrame
+    local vel = Attach.TargetHRP.AssemblyLinearVelocity
+    if not (math.isfinite(vel.X) and math.isfinite(vel.Y) and math.isfinite(vel.Z)) then
+        vel = Vector3.zero
     end
+
+    local predictedCF = targetCF
+    Attach.LocalHRP.CFrame = predictedCF * (getgenv().AttachOffset or Config.AttachOffset)
+    Attach.LocalHRP.AssemblyLinearVelocity = vel
+end
+
+RunService.Stepped:Connect(executeAttachLoop)
+RunService.RenderStepped:Connect(executeAttachLoop)
+RunService.Heartbeat:Connect(executeAttachLoop)
+
+function Attach.Start(player)
+    local plr = typeof(player) == "Instance" and player:IsA("Player") and player or findPlayer(tostring(player))
+    if not plr then return false end
+
+    Attach.Stop()
+    Attach.Target = plr
+    Attach.Enabled = true
+
+    if plr.Character then
+        Attach.TargetHRP = plr.Character:FindFirstChild("HumanoidRootPart") or plr.Character:WaitForChild("HumanoidRootPart", 2)
+        if Attach.LocalHRP and Attach.TargetHRP then
+            setPhysicsRep(Attach.LocalHRP, Attach.TargetHRP)
+        end
+    end
+
+    Attach.CharConn = plr.CharacterAdded:Connect(function(char)
+        local hrp = char:WaitForChild("HumanoidRootPart", 5)
+        if hrp then
+            Attach.TargetHRP = hrp
+            if Attach.LocalHRP then
+                setPhysicsRep(Attach.LocalHRP, Attach.TargetHRP)
+            end
+        end
+    end)
+
+    if getgenv().addvape then pcall(getgenv().addvape, "attach") end
     return true
 end
 
@@ -146,7 +320,15 @@ function Attach.Stop()
     end
 
     if Attach.LocalHRP then
-        pcall(setPhysicsRep, Attach.LocalHRP, nil)
+        setPhysicsRep(Attach.LocalHRP, nil)
+        if Attach.Humanoid then
+            Attach.Humanoid.PlatformStand = false
+            pcall(function() Attach.Humanoid:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+        end
+        pcall(function()
+            Attach.LocalHRP.AssemblyLinearVelocity = Vector3.zero
+            Attach.LocalHRP.Velocity = Vector3.zero
+        end)
     end
 
     if getgenv().delvape then
@@ -156,16 +338,7 @@ function Attach.Stop()
     end
 end
 
-function Attach.Toggle(player)
-    if Attach.Enabled then
-        Attach.Stop()
-        return false
-    else
-        return Attach.Start(player)
-    end
-end
-
--- //======= INVIS 모듈 (순수 로직) =======//
+-- //======= INVIS 모듈 =======//
 local Invis = {
     Alive = true,
     Enabled = false,
@@ -201,9 +374,7 @@ local function destroyInvisAnim()
 end
 
 local function loadInvisAnim(humanoid)
-    if invisTrack and invisHum == humanoid then
-        return invisTrack
-    end
+    if invisTrack and invisHum == humanoid then return invisTrack end
     destroyInvisAnim()
     local animator = humanoid:FindFirstChildWhichIsA("Animator")
     if not animator then
@@ -303,22 +474,16 @@ local function setupInvisChar(char)
 
     local hum = char:WaitForChild("Humanoid", 10)
     local hrp = char:WaitForChild("HumanoidRootPart", 10)
-    if not Invis.Alive or LocalPlayer.Character ~= char or not hum or not hrp then
-        return
-    end
+    if not Invis.Alive or LocalPlayer.Character ~= char or not hum or not hrp then return end
     invisChar = char
     invisHum = hum
     invisHRP = hrp
 
     invisDescConns.descendantAdded = char.DescendantAdded:Connect(function(d)
-        if Invis.Enabled then
-            task.defer(applyFade, d)
-        end
+        if Invis.Enabled then task.defer(applyFade, d) end
     end)
 
-    if Invis.Enabled then
-        applyFadeAll(char)
-    end
+    if Invis.Enabled then applyFadeAll(char) end
 end
 
 local function invisHeartbeat()
@@ -332,9 +497,7 @@ local function invisHeartbeat()
 
     pcall(function()
         if track then
-            if not track.IsPlaying then
-                track:Play(0)
-            end
+            if not track.IsPlaying then track:Play(0) end
             track.TimePosition = Invis.AnimationTime
             track:AdjustSpeed(0)
             track:AdjustWeight(1, 0)
@@ -349,9 +512,7 @@ end
 function Invis.SetEnabled(state)
     Invis.Enabled = state == true
     if Invis.Enabled then
-        if invisChar then
-            applyFadeAll(invisChar)
-        end
+        if invisChar then applyFadeAll(invisChar) end
     else
         stopInvisTrack()
         restoreTransparency()
@@ -361,20 +522,6 @@ end
 
 function Invis.Toggle()
     return Invis.SetEnabled(not Invis.Enabled)
-end
-
-function Invis.Unload()
-    if not Invis.Alive then return end
-    Invis.Alive = false
-    Invis.Enabled = false
-    disconnectTable(invisDescConns)
-    disconnectTable(invisConns)
-    stopInvisTrack()
-    restoreTransparency()
-    destroyInvisAnim()
-    if getgenv().TSBInvisibility == Invis then
-        getgenv().TSBInvisibility = nil
-    end
 end
 
 invisConns.heartbeat = RunService.Heartbeat:Connect(invisHeartbeat)
@@ -394,18 +541,6 @@ local God = {
     UndergroundPlatform = nil,
     SavedCFrame = nil,
     Teleporting = false,
-}
-
-local SkillWhitelist = {
-    ["10469643643"] = true,
-    ["10471336737"] = true,
-    ["10469639222"] = true,
-    ["10468665991"] = true,
-    ["10469493270"] = true,
-    ["10466974800"] = true,
-    ["10479335397"] = true,
-    ["12510170988"] = true,
-    ["10469630950"] = true,
 }
 
 local function getChar()
@@ -549,22 +684,16 @@ end
 function God.Enable(skipTeleport)
     if God.Enabled then return end
     God.Enabled = true
-
-    if getgenv().addvape then
-        pcall(getgenv().addvape, "godmode")
-    end
+    if getgenv().addvape then pcall(getgenv().addvape, "godmode") end
 
     createGhost()
-
     if God.LoopThread then
         task.cancel(God.LoopThread)
         God.LoopThread = nil
     end
 
     God.LoopThread = task.spawn(function()
-        if not skipTeleport then
-            doTeleportCycle()
-        end
+        if not skipTeleport then doTeleportCycle() end
         if not God.Enabled then return end
         God.Active = true
 
@@ -612,9 +741,7 @@ function God.Disable()
     if char then
         local hum = char:FindFirstChildOfClass("Humanoid")
         if hum then
-            pcall(function()
-                workspace.CurrentCamera.CameraSubject = hum
-            end)
+            pcall(function() workspace.CurrentCamera.CameraSubject = hum end)
         end
     end
 
@@ -625,11 +752,523 @@ function God.Disable()
 end
 
 function God.Toggle()
-    if God.Enabled then
-        God.Disable()
-    else
-        God.Enable(false)
+    if God.Enabled then God.Disable() else God.Enable(false) end
+end
+
+-- //======= ANTI-VOID 모듈 =======//
+local AntiVoid = {
+    Enabled = false,
+    Part = nil,
+    ConnFPDH = nil,
+    ConnRender = nil,
+    ConnHealth = nil,
+    ConnChar = nil,
+    LastHealth = 100,
+}
+
+local function setupAntiVoidChar(character)
+    if not character then return end
+    local humanoid = character:FindFirstChildOfClass("Humanoid") or character:WaitForChild("Humanoid", 3)
+    local hrp = character:FindFirstChild("HumanoidRootPart") or character:WaitForChild("HumanoidRootPart", 3)
+    if not humanoid or not hrp then return end
+
+    AntiVoid.LastHealth = humanoid.Health
+    if AntiVoid.ConnHealth then AntiVoid.ConnHealth:Disconnect() AntiVoid.ConnHealth = nil end
+    if AntiVoid.ConnRender then AntiVoid.ConnRender:Disconnect() AntiVoid.ConnRender = nil end
+
+    AntiVoid.ConnRender = RunService.RenderStepped:Connect(function()
+        if not AntiVoid.Enabled then return end
+        local root = character:FindFirstChild("HumanoidRootPart")
+        local hum = character:FindFirstChildOfClass("Humanoid")
+        if root and hum then
+            AntiVoid.LastHealth = hum.Health
+            if AntiVoid.Part then
+                AntiVoid.Part.CFrame = CFrame.new(root.Position.X, -10008, root.Position.Z)
+            end
+        end
+    end)
+
+    AntiVoid.ConnHealth = humanoid.HealthChanged:Connect(function(newHealth)
+        if not AntiVoid.Enabled then return end
+        local root = character:FindFirstChild("HumanoidRootPart")
+        if newHealth <= 0 and root and root.CFrame.Y <= 0 then
+            humanoid.Health = AntiVoid.LastHealth
+        end
+    end)
+end
+
+function AntiVoid.Stop()
+    AntiVoid.Enabled = false
+    if AntiVoid.ConnFPDH then AntiVoid.ConnFPDH:Disconnect() AntiVoid.ConnFPDH = nil end
+    if AntiVoid.ConnRender then AntiVoid.ConnRender:Disconnect() AntiVoid.ConnRender = nil end
+    if AntiVoid.ConnHealth then AntiVoid.ConnHealth:Disconnect() AntiVoid.ConnHealth = nil end
+    if AntiVoid.ConnChar then AntiVoid.ConnChar:Disconnect() AntiVoid.ConnChar = nil end
+    if AntiVoid.Part then
+        pcall(function() AntiVoid.Part:Destroy() end)
+        AntiVoid.Part = nil
     end
+    pcall(function()
+        if getgenv().FPDH then
+            workspace.FallenPartsDestroyHeight = getgenv().FPDH
+        end
+    end)
+end
+
+function AntiVoid.Start(targetChar)
+    if getgenv().addvape then pcall(getgenv().addvape, "antivoid") end
+    AntiVoid.Stop()
+    AntiVoid.Enabled = true
+
+    getgenv().FPDH = workspace.FallenPartsDestroyHeight
+    workspace.FallenPartsDestroyHeight = (0/0)
+
+    AntiVoid.ConnFPDH = workspace:GetPropertyChangedSignal("FallenPartsDestroyHeight"):Connect(function()
+        local current = workspace.FallenPartsDestroyHeight
+        if current == current then
+            workspace.FallenPartsDestroyHeight = (0/0)
+        end
+    end)
+
+    local p = Instance.new("Part")
+    p.Name = "AntiVoidFloor_" .. HttpService:GenerateGUID()
+    p.Size = Vector3.new(4096, 10, 4096)
+    p.CFrame = CFrame.new(0, -10008, 0)
+    p.Anchored = true
+    p.CanCollide = true
+    p.Transparency = 0.5
+    p.Material = Enum.Material.Neon
+    p.Color = Color3.fromRGB(0, 200, 255)
+    p.Parent = workspace
+    AntiVoid.Part = p
+
+    local char = targetChar or LocalPlayer.Character
+    if char then setupAntiVoidChar(char) end
+
+    AntiVoid.ConnChar = LocalPlayer.CharacterAdded:Connect(function(newChar)
+        task.wait(0.1)
+        if AntiVoid.Enabled then setupAntiVoidChar(newChar) end
+    end)
+end
+
+function AntiVoid.Toggle()
+    if AntiVoid.Enabled then
+        if getgenv().delvape then pcall(getgenv().delvape, "antivoid") end
+        AntiVoid.Stop()
+        notify("Anti-Void", "안티보이드 OFF", 2)
+    else
+        AntiVoid.Start()
+        notify("Anti-Void", "안티보이드 ON", 2)
+    end
+    return AntiVoid.Enabled
+end
+
+-- //======= LOOPFLING 모듈 =======//
+local LoopFling = {
+    Enabled = false,
+    Targets = {},
+    Thread = nil,
+}
+
+local function isTooHigh(char)
+    if not char then return false end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    local params = RaycastParams.new()
+    params.FilterDescendantsInstances = { char, LocalPlayer.Character }
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    local hit = workspace:Raycast(hrp.Position, Vector3.new(0, -500, 0), params)
+    if hit then
+        return (hrp.Position - hit.Position).Magnitude > 30
+    end
+    return true
+end
+
+function LoopFling.Start(playerList)
+    LoopFling.Stop()
+
+    local targets = {}
+    if typeof(playerList) == "table" then
+        for _, p in ipairs(playerList) do
+            local plr = typeof(p) == "Instance" and p:IsA("Player") and p or findPlayer(tostring(p))
+            if plr and plr ~= LocalPlayer then
+                table.insert(targets, plr)
+            end
+        end
+    else
+        local plr = typeof(playerList) == "Instance" and playerList:IsA("Player") and playerList or findPlayer(tostring(playerList))
+        if plr then table.insert(targets, plr) end
+    end
+
+    if #targets == 0 then
+        notify("LoopFling", "대상을 찾을 수 없습니다", 2)
+        return false
+    end
+
+    LoopFling.Targets = targets
+    LoopFling.Enabled = true
+    getgenv().LoopFlingActive = true
+
+    local names = {}
+    for _, t in ipairs(targets) do
+        table.insert(names, t.Name)
+        if getgenv().addTargetCmd then
+            pcall(getgenv().addTargetCmd, t, "loopfling")
+        end
+    end
+    notify("LoopFling", table.concat(names, ", ") .. " LoopFling 시작!", 2)
+
+    if getgenv().addvape then pcall(getgenv().addvape, "loopfling") end
+
+    local idx = 1
+    LoopFling.Thread = task.spawn(function()
+        settings().Physics.AllowSleep = false
+        pcall(function()
+            if sethiddenproperty then
+                sethiddenproperty(LocalPlayer, "SimulationRadius", math.huge)
+                sethiddenproperty(LocalPlayer, "MaxSimulationRadius", math.huge)
+            end
+        end)
+
+        while LoopFling.Enabled and getgenv().LoopFlingActive do
+            local target = LoopFling.Targets[idx]
+            if target and target.Parent == Players and target.Character then
+                local char = LocalPlayer.Character
+                if char then
+                    local myHRP = char:FindFirstChild("HumanoidRootPart")
+                    local theirHRP = target.Character:FindFirstChild("HumanoidRootPart")
+                    if myHRP and theirHRP and not isTooHigh(target.Character) then
+                        local savedCF = myHRP.CFrame
+                        local conn = nil
+                        local stopFlag = false
+
+                        conn = RunService.Heartbeat:Connect(function()
+                            if not LoopFling.Enabled or not target or not target.Character or stopFlag then
+                                if conn then conn:Disconnect() end
+                                return
+                            end
+                            local c2 = LocalPlayer.Character
+                            if not c2 then
+                                if conn then conn:Disconnect() end
+                                return
+                            end
+                            local hrp3 = c2:FindFirstChild("HumanoidRootPart")
+                            local hrp4 = target.Character:FindFirstChild("HumanoidRootPart")
+                            local hum = c2:FindFirstChildOfClass("Humanoid")
+                            if not hrp3 or not hrp4 then
+                                if conn then conn:Disconnect() end
+                                return
+                            end
+                            if isTooHigh(target.Character) then
+                                stopFlag = true
+                                if conn then conn:Disconnect() end
+                                return
+                            end
+                            if hum then hum.PlatformStand = true end
+                            for _, d in pairs(c2:GetDescendants()) do
+                                if d:IsA("BasePart") then
+                                    d.CanCollide = false
+                                    d.CanTouch = false
+                                    d.CanQuery = false
+                                    d.Velocity = Vector3.new(math.huge, math.huge, math.huge)
+                                    d.RotVelocity = Vector3.new(math.huge, math.huge, math.huge)
+                                end
+                            end
+                            pcall(setPhysicsRep, hrp3, hrp4)
+                            hrp3.Velocity = Vector3.new(math.huge, math.huge, math.huge)
+                            hrp3.RotVelocity = Vector3.new(math.huge, math.huge, math.huge)
+                            hrp3.CFrame = hrp4.CFrame
+                                * CFrame.Angles(math.rad(math.random(0,360)), math.rad(math.random(0,360)), math.rad(math.random(0,360)))
+                                * CFrame.new(0, 0, 0.05)
+                        end)
+
+                        local start = tick()
+                        while not stopFlag and tick() - start <= 3 and LoopFling.Enabled do
+                            task.wait()
+                        end
+                        if conn then conn:Disconnect() end
+
+                        if LocalPlayer.Character then
+                            local hrp = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                            local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+                            if hum then hum.PlatformStand = false end
+                            if hrp then
+                                hrp.CFrame = savedCF
+                                hrp.Velocity = Vector3.zero
+                                hrp.RotVelocity = Vector3.zero
+                            end
+                        end
+                        task.wait(0.2)
+                    end
+                end
+            end
+
+            idx = idx + 1
+            if idx > #LoopFling.Targets then idx = 1 end
+            task.wait(0.1)
+        end
+    end)
+
+    return true
+end
+
+function LoopFling.Stop()
+    LoopFling.Enabled = false
+    getgenv().LoopFlingActive = false
+    LoopFling.Targets = {}
+    if LoopFling.Thread then
+        -- thread will exit on next loop check
+        LoopFling.Thread = nil
+    end
+    if getgenv().removeTargetCmd then
+        pcall(getgenv().removeTargetCmd, nil, "loopfling")
+    end
+    if getgenv().delvape then pcall(getgenv().delvape, "loopfling") end
+    notify("LoopFling", "LoopFling 중지됨", 2)
+end
+
+function LoopFling.Toggle(playerOrList)
+    if LoopFling.Enabled then
+        LoopFling.Stop()
+        return false
+    else
+        return LoopFling.Start(playerOrList)
+    end
+end
+
+-- //======= STAND 모듈 (간소화) =======//
+local Stand = {
+    Enabled = false,
+    Target = nil,
+    Follow = true,
+    Conn = nil,
+    Offset = CFrame.new(-2, 2, 5),
+}
+
+function Stand.Start(player, followMode)
+    Stand.Stop()
+    local plr = typeof(player) == "Instance" and player:IsA("Player") and player or findPlayer(tostring(player))
+    if not plr then
+        notify("Stand", "대상을 찾을 수 없습니다", 2)
+        return false
+    end
+
+    Stand.Target = plr
+    Stand.Enabled = true
+    Stand.Follow = followMode ~= false
+
+    if getgenv().addvape then pcall(getgenv().addvape, "standgui") end
+    notify("Stand", plr.Name .. " 스탠드 " .. (Stand.Follow and "Follow" or "Don't Follow") .. " 시작", 2)
+
+    Stand.Conn = RunService.Heartbeat:Connect(function()
+        if not Stand.Enabled or not Stand.Target then return end
+        local myChar = LocalPlayer.Character
+        local theirChar = Stand.Target.Character
+        if not myChar or not theirChar then return end
+        local myHRP = myChar:FindFirstChild("HumanoidRootPart")
+        local theirHRP = theirChar:FindFirstChild("HumanoidRootPart")
+        if not myHRP or not theirHRP then return end
+
+        if Stand.Follow then
+            local hum = myChar:FindFirstChildOfClass("Humanoid")
+            if hum then
+                pcall(function() hum.AutoRotate = false end)
+                hum.PlatformStand = true
+            end
+            for _, d in pairs(myChar:GetDescendants()) do
+                if d:IsA("BasePart") then
+                    d.CanCollide = false
+                end
+            end
+            setPhysicsRep(myHRP, theirHRP)
+            myHRP.CFrame = theirHRP.CFrame * Stand.Offset
+            myHRP.AssemblyLinearVelocity = Vector3.zero
+            myHRP.AssemblyAngularVelocity = Vector3.zero
+        end
+    end)
+
+    return true
+end
+
+function Stand.Stop()
+    Stand.Enabled = false
+    Stand.Target = nil
+    if Stand.Conn then
+        Stand.Conn:Disconnect()
+        Stand.Conn = nil
+    end
+    local char = LocalPlayer.Character
+    if char then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if hum then
+            hum.PlatformStand = false
+            pcall(function() hum.AutoRotate = true end)
+        end
+        if hrp then
+            setPhysicsRep(hrp, nil)
+            hrp.AssemblyLinearVelocity = Vector3.zero
+        end
+    end
+    if getgenv().delvape then pcall(getgenv().delvape, "standgui") end
+    notify("Stand", "스탠드 OFF", 1.5)
+end
+
+function Stand.Toggle(player, followMode)
+    if Stand.Enabled then
+        Stand.Stop()
+        return false
+    else
+        return Stand.Start(player, followMode)
+    end
+end
+
+-- //======= TPA (Teleport All) 모듈 =======//
+local TPA = {
+    Running = false,
+    Thread = nil,
+    Settings = {
+        delay = 0.05,           -- 더 빠르게 (기존 0.3 → 0.05)
+        excludeSelf = true,
+        randomOrder = false,
+        tpDir = "behind",       -- behind / front / side
+        ox = 0, oy = 0, oz = 0,
+        voidY = -499,           -- 공허 높이
+        voidDuration = 1,       -- 공허에 머무는 시간 (초)
+    }
+}
+
+local function getTPOffset()
+    local ox, oy, oz = TPA.Settings.ox, TPA.Settings.oy, TPA.Settings.oz
+    if TPA.Settings.tpDir == "behind" then oz = oz + 2
+    elseif TPA.Settings.tpDir == "front" then oz = oz - 2
+    elseif TPA.Settings.tpDir == "side" then ox = ox + 2
+    end
+    return CFrame.new(ox, oy, oz)
+end
+
+function TPA.Start()
+    if TPA.Running then
+        TPA.Stop()
+        return false
+    end
+
+    TPA.Running = true
+    getgenv().TpaRunning = true
+    if getgenv().addvape then pcall(getgenv().addvape, "teleportallgui") end
+    notify("TPA", "Teleport All 시작 (고속)", 2)
+
+    TPA.Thread = task.spawn(function()
+        -- 시작 위치 저장 (나중에 공허 후 복귀용)
+        local returnCF = nil
+        local myChar0 = LocalPlayer.Character
+        local myHRP0 = myChar0 and myChar0:FindFirstChild("HumanoidRootPart")
+        if myHRP0 then
+            returnCF = myHRP0.CFrame
+        end
+
+        local list = {}
+        local skipped = 0
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if TPA.Settings.excludeSelf and plr == LocalPlayer then
+                -- skip self
+            elseif Whitelist.IsWhitelisted(plr) then
+                skipped = skipped + 1
+            else
+                table.insert(list, plr)
+            end
+        end
+        if skipped > 0 then
+            notify("TPA", "화이트리스트 " .. skipped .. "명 스킵", 1.5)
+        end
+
+        if TPA.Settings.randomOrder then
+            for i = #list, 2, -1 do
+                local j = math.random(1, i)
+                list[i], list[j] = list[j], list[i]
+            end
+        end
+
+        local offset = getTPOffset()
+        local delay = TPA.Settings.delay > 0 and TPA.Settings.delay or 0.05
+
+        -- 순차 텔레포트 (고속)
+        for i, plr in ipairs(list) do
+            if not TPA.Running then break end
+            local myChar = LocalPlayer.Character
+            local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
+            local theirChar = plr.Character
+            local theirHRP = theirChar and theirChar:FindFirstChild("HumanoidRootPart")
+
+            if myHRP and theirHRP then
+                setPhysicsRep(myHRP, theirHRP)
+                myHRP.CFrame = theirHRP.CFrame * offset
+                myHRP.AssemblyLinearVelocity = Vector3.zero
+                task.wait(delay)
+                setPhysicsRep(myHRP, nil)
+            end
+        end
+
+        if not TPA.Running then
+            getgenv().TpaRunning = false
+            if getgenv().delvape then pcall(getgenv().delvape, "teleportallgui") end
+            return
+        end
+
+        -- ===== 전부 완료 후: 공허 1초 → 안티보이드 자동 ON → 복귀 =====
+        notify("TPA", "전원 이동 완료 → 공허 진입", 1.5)
+
+        local myChar = LocalPlayer.Character
+        local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
+        if myHRP then
+            -- 복귀 위치 갱신 (마지막 위치)
+            if not returnCF then
+                returnCF = myHRP.CFrame
+            end
+
+            -- 안티보이드 자동 켜기
+            local antiVoidWasOff = not AntiVoid.Enabled
+            if antiVoidWasOff then
+                AntiVoid.Start()
+                notify("TPA", "안티보이드 자동 ON", 1)
+            end
+
+            -- 공허로 이동
+            local voidY = TPA.Settings.voidY or -499
+            myHRP.CFrame = CFrame.new(myHRP.Position.X, voidY, myHRP.Position.Z)
+            myHRP.AssemblyLinearVelocity = Vector3.zero
+            myHRP.AssemblyAngularVelocity = Vector3.zero
+
+            -- 공허에서 대기
+            local voidDur = TPA.Settings.voidDuration or 1
+            task.wait(voidDur)
+
+            -- 원래 위치로 복귀
+            if TPA.Running and LocalPlayer.Character then
+                local hrp = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                if hrp and returnCF then
+                    hrp.CFrame = returnCF
+                    hrp.AssemblyLinearVelocity = Vector3.zero
+                    hrp.AssemblyAngularVelocity = Vector3.zero
+                end
+            end
+
+            notify("TPA", "공허 완료 → 복귀", 2)
+        end
+
+        TPA.Running = false
+        getgenv().TpaRunning = false
+        if getgenv().delvape then pcall(getgenv().delvape, "teleportallgui") end
+        notify("TPA", "Teleport All 완료", 2)
+    end)
+
+    return true
+end
+
+function TPA.Stop()
+    TPA.Running = false
+    getgenv().TpaRunning = false
+    if getgenv().delvape then pcall(getgenv().delvape, "teleportallgui") end
+    notify("TPA", "Teleport All 중지", 2)
 end
 
 -- //======= UI =======//
@@ -649,7 +1288,6 @@ local function makeStroke(parent, color, thickness)
     return s
 end
 
--- 기존 GUI 제거
 pcall(function()
     local old = CoreGui:FindFirstChild(Config.GuiName)
     if old then old:Destroy() end
@@ -669,8 +1307,8 @@ end
 
 local Main = Instance.new("Frame")
 Main.Name = "Main"
-Main.Size = UDim2.fromOffset(260, 280)
-Main.Position = UDim2.new(0.5, -130, 0.75, 0)
+Main.Size = UDim2.fromOffset(270, 600)
+Main.Position = UDim2.new(0.5, -135, 0.5, -300)
 Main.BackgroundColor3 = Theme.Bg
 Main.BorderSizePixel = 0
 Main.Active = true
@@ -684,14 +1322,13 @@ local Title = Instance.new("TextLabel")
 Title.Size = UDim2.new(1, -16, 0, 28)
 Title.Position = UDim2.fromOffset(8, 6)
 Title.BackgroundTransparency = 1
-Title.Text = "TSB · God / Invis / Attach"
+Title.Text = "TSB · Combined v2"
 Title.TextColor3 = Theme.Text
 Title.Font = Enum.Font.GothamBold
 Title.TextSize = 14
 Title.TextXAlignment = Enum.TextXAlignment.Left
 Title.Parent = Main
 
--- 닫기 버튼
 local CloseBtn = Instance.new("TextButton")
 CloseBtn.Size = UDim2.fromOffset(24, 24)
 CloseBtn.Position = UDim2.new(1, -30, 0, 6)
@@ -702,12 +1339,10 @@ CloseBtn.Font = Enum.Font.GothamBold
 CloseBtn.TextSize = 16
 CloseBtn.Parent = Main
 makeCorner(CloseBtn, 4)
-
 CloseBtn.MouseButton1Click:Connect(function()
     ScreenGui.Enabled = not ScreenGui.Enabled
 end)
 
--- 구분선
 local function sep(y)
     local line = Instance.new("Frame")
     line.Size = UDim2.new(1, -16, 0, 1)
@@ -720,21 +1355,21 @@ end
 
 sep(36)
 
--- ===== Attach 섹션 =====
-local AttachLabel = Instance.new("TextLabel")
-AttachLabel.Size = UDim2.new(1, -16, 0, 18)
-AttachLabel.Position = UDim2.fromOffset(8, 44)
-AttachLabel.BackgroundTransparency = 1
-AttachLabel.Text = "Attach (닉 / 표시닉 2글자+)"
-AttachLabel.TextColor3 = Theme.SubText
-AttachLabel.Font = Enum.Font.Gotham
-AttachLabel.TextSize = 12
-AttachLabel.TextXAlignment = Enum.TextXAlignment.Left
-AttachLabel.Parent = Main
+-- 닉네임 입력
+local NameLabel = Instance.new("TextLabel")
+NameLabel.Size = UDim2.new(1, -16, 0, 16)
+NameLabel.Position = UDim2.fromOffset(8, 42)
+NameLabel.BackgroundTransparency = 1
+NameLabel.Text = "대상 닉네임 (2글자+)"
+NameLabel.TextColor3 = Theme.SubText
+NameLabel.Font = Enum.Font.Gotham
+NameLabel.TextSize = 11
+NameLabel.TextXAlignment = Enum.TextXAlignment.Left
+NameLabel.Parent = Main
 
 local NameBox = Instance.new("TextBox")
 NameBox.Size = UDim2.new(1, -16, 0, 28)
-NameBox.Position = UDim2.fromOffset(8, 64)
+NameBox.Position = UDim2.fromOffset(8, 60)
 NameBox.BackgroundColor3 = Theme.Secondary
 NameBox.Text = ""
 NameBox.PlaceholderText = "닉네임 입력..."
@@ -747,59 +1382,129 @@ NameBox.Parent = Main
 makeCorner(NameBox, 6)
 makeStroke(NameBox, Theme.Border, 1)
 
-local AttachBtn = Instance.new("TextButton")
-AttachBtn.Size = UDim2.new(1, -16, 0, 30)
-AttachBtn.Position = UDim2.fromOffset(8, 98)
-AttachBtn.BackgroundColor3 = Theme.Off
-AttachBtn.Text = "○ Attach OFF"
-AttachBtn.TextColor3 = Theme.Text
-AttachBtn.Font = Enum.Font.GothamBold
-AttachBtn.TextSize = 13
-AttachBtn.Parent = Main
-makeCorner(AttachBtn, 6)
-
 local StatusLabel = Instance.new("TextLabel")
 StatusLabel.Size = UDim2.new(1, -16, 0, 16)
-StatusLabel.Position = UDim2.fromOffset(8, 130)
+StatusLabel.Position = UDim2.fromOffset(8, 90)
 StatusLabel.BackgroundTransparency = 1
-StatusLabel.Text = "대상: 없음"
+StatusLabel.Text = "상태: 대기"
 StatusLabel.TextColor3 = Theme.SubText
 StatusLabel.Font = Enum.Font.Gotham
 StatusLabel.TextSize = 11
 StatusLabel.TextXAlignment = Enum.TextXAlignment.Left
 StatusLabel.Parent = Main
 
-sep(150)
+sep(110)
 
--- ===== Invis / Godmode 버튼 =====
-local InvisBtn = Instance.new("TextButton")
-InvisBtn.Size = UDim2.new(1, -16, 0, 32)
-InvisBtn.Position = UDim2.fromOffset(8, 160)
-InvisBtn.BackgroundColor3 = Theme.Off
-InvisBtn.Text = "○ Invisibility OFF"
-InvisBtn.TextColor3 = Theme.Text
-InvisBtn.Font = Enum.Font.GothamBold
-InvisBtn.TextSize = 13
-InvisBtn.Parent = Main
-makeCorner(InvisBtn, 6)
+-- 버튼 생성 헬퍼
+local function makeToggleBtn(y, text)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, -16, 0, 30)
+    btn.Position = UDim2.fromOffset(8, y)
+    btn.BackgroundColor3 = Theme.Off
+    btn.Text = "○ " .. text .. " OFF"
+    btn.TextColor3 = Theme.Text
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 12
+    btn.Parent = Main
+    makeCorner(btn, 6)
+    return btn
+end
 
-local GodBtn = Instance.new("TextButton")
-GodBtn.Size = UDim2.new(1, -16, 0, 32)
-GodBtn.Position = UDim2.fromOffset(8, 200)
-GodBtn.BackgroundColor3 = Theme.Off
-GodBtn.Text = "○ Godmode OFF"
-GodBtn.TextColor3 = Theme.Text
-GodBtn.Font = Enum.Font.GothamBold
-GodBtn.TextSize = 13
-GodBtn.Parent = Main
-makeCorner(GodBtn, 6)
+local function makeActionBtn(y, text, color)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, -16, 0, 30)
+    btn.Position = UDim2.fromOffset(8, y)
+    btn.BackgroundColor3 = color or Theme.Accent
+    btn.Text = text
+    btn.TextColor3 = Theme.Text
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 12
+    btn.Parent = Main
+    makeCorner(btn, 6)
+    return btn
+end
+
+-- 토글 버튼들
+local AttachBtn   = makeToggleBtn(118, "Attach")
+local InvisBtn    = makeToggleBtn(152, "Invisibility")
+local GodBtn      = makeToggleBtn(186, "Godmode")
+local AntiVoidBtn = makeToggleBtn(220, "Anti-Void")
+local LoopFlingBtn= makeToggleBtn(254, "LoopFling")
+local StandBtn    = makeToggleBtn(288, "Stand (Follow)")
+
+sep(324)
+
+-- 액션 버튼
+local TPABtn       = makeActionBtn(332, "▶ Teleport All (TPA)", Theme.Accent)
+local StandDontBtn = makeActionBtn(366, "Stand (Don't Follow)", Theme.Purple)
+local WhitelistBtn = makeActionBtn(400, "○ 화이트리스트 목록 OFF", Color3.fromRGB(60, 60, 80))
+local StopAllBtn   = makeActionBtn(434, "■ 모든 기능 중지", Theme.Off)
+
+-- 화이트리스트 목록 패널
+local WLPanel = Instance.new("Frame")
+WLPanel.Name = "WhitelistPanel"
+WLPanel.Size = UDim2.new(1, -16, 0, 70)
+WLPanel.Position = UDim2.fromOffset(8, 470)
+WLPanel.BackgroundColor3 = Theme.Secondary
+WLPanel.BorderSizePixel = 0
+WLPanel.Visible = false
+WLPanel.Parent = Main
+makeCorner(WLPanel, 6)
+makeStroke(WLPanel, Theme.Border, 1)
+
+local WLScroll = Instance.new("ScrollingFrame")
+WLScroll.Size = UDim2.new(1, -8, 1, -8)
+WLScroll.Position = UDim2.fromOffset(4, 4)
+WLScroll.BackgroundTransparency = 1
+WLScroll.BorderSizePixel = 0
+WLScroll.ScrollBarThickness = 3
+WLScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+WLScroll.Parent = WLPanel
+
+local WLListLayout = Instance.new("UIListLayout")
+WLListLayout.Padding = UDim.new(0, 2)
+WLListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+WLListLayout.Parent = WLScroll
+
+local function refreshWhitelistPanel()
+    for _, child in ipairs(WLScroll:GetChildren()) do
+        if child:IsA("TextLabel") or child:IsA("TextButton") then
+            child:Destroy()
+        end
+    end
+    local names = Whitelist.GetNames()
+    if #names == 0 then
+        local empty = Instance.new("TextLabel")
+        empty.Size = UDim2.new(1, 0, 0, 20)
+        empty.BackgroundTransparency = 1
+        empty.Text = "등록된 유저 없음 (.화이트 닉네임)"
+        empty.TextColor3 = Theme.SubText
+        empty.Font = Enum.Font.Gotham
+        empty.TextSize = 11
+        empty.Parent = WLScroll
+    else
+        for i, name in ipairs(names) do
+            local lbl = Instance.new("TextLabel")
+            lbl.Size = UDim2.new(1, -4, 0, 18)
+            lbl.BackgroundTransparency = 1
+            lbl.Text = "• " .. name
+            lbl.TextColor3 = Theme.On
+            lbl.Font = Enum.Font.Gotham
+            lbl.TextSize = 11
+            lbl.TextXAlignment = Enum.TextXAlignment.Left
+            lbl.LayoutOrder = i
+            lbl.Parent = WLScroll
+        end
+    end
+    WLScroll.CanvasSize = UDim2.new(0, 0, 0, math.max(20, #names * 20))
+end
 
 -- 하단 힌트
 local Hint = Instance.new("TextLabel")
-Hint.Size = UDim2.new(1, -16, 0, 28)
-Hint.Position = UDim2.fromOffset(8, 240)
+Hint.Size = UDim2.new(1, -16, 0, 36)
+Hint.Position = UDim2.fromOffset(8, 548)
 Hint.BackgroundTransparency = 1
-Hint.Text = "드래그로 이동 · 닫기 후 다시 열려면 스크립트 재실행"
+Hint.Text = "채팅: .화이트 닉네임  → 화이트리스트 등록\n재접 시 초기화 · TPA는 화이트리스트 제외"
 Hint.TextColor3 = Theme.SubText
 Hint.Font = Enum.Font.Gotham
 Hint.TextSize = 10
@@ -807,63 +1512,71 @@ Hint.TextWrapped = true
 Hint.TextXAlignment = Enum.TextXAlignment.Left
 Hint.Parent = Main
 
--- //======= UI 갱신 함수 =======//
-local function refreshUI()
-    -- Attach
-    if Attach.Enabled and Attach.Target then
-        AttachBtn.Text = "● Attach ON"
-        AttachBtn.BackgroundColor3 = Theme.On
-        StatusLabel.Text = "대상: " .. Attach.Target.Name .. " (" .. (Attach.Target.DisplayName or "") .. ")"
-        StatusLabel.TextColor3 = Theme.On
+-- //======= UI 갱신 =======//
+local function setToggle(btn, name, on)
+    if on then
+        btn.Text = "● " .. name .. " ON"
+        btn.BackgroundColor3 = Theme.On
     else
-        AttachBtn.Text = "○ Attach OFF"
-        AttachBtn.BackgroundColor3 = Theme.Off
-        StatusLabel.Text = "대상: 없음"
-        StatusLabel.TextColor3 = Theme.SubText
-    end
-
-    -- Invis
-    if Invis.Enabled then
-        InvisBtn.Text = "● Invisibility ON"
-        InvisBtn.BackgroundColor3 = Theme.On
-    else
-        InvisBtn.Text = "○ Invisibility OFF"
-        InvisBtn.BackgroundColor3 = Theme.Off
-    end
-
-    -- Godmode
-    if God.Enabled then
-        GodBtn.Text = "● Godmode ON"
-        GodBtn.BackgroundColor3 = Theme.On
-    else
-        GodBtn.Text = "○ Godmode OFF"
-        GodBtn.BackgroundColor3 = Theme.Off
+        btn.Text = "○ " .. name .. " OFF"
+        btn.BackgroundColor3 = Theme.Off
     end
 end
 
--- //======= 버튼 이벤트 =======//
+local function refreshUI()
+    setToggle(AttachBtn, "Attach", Attach.Enabled)
+    setToggle(InvisBtn, "Invisibility", Invis.Enabled)
+    setToggle(GodBtn, "Godmode", God.Enabled)
+    setToggle(AntiVoidBtn, "Anti-Void", AntiVoid.Enabled)
+    setToggle(LoopFlingBtn, "LoopFling", LoopFling.Enabled)
+    setToggle(StandBtn, "Stand (Follow)", Stand.Enabled and Stand.Follow)
+
+    if Attach.Enabled and Attach.Target then
+        StatusLabel.Text = "Attach → " .. Attach.Target.Name
+        StatusLabel.TextColor3 = Theme.On
+    elseif LoopFling.Enabled and #LoopFling.Targets > 0 then
+        StatusLabel.Text = "LoopFling → " .. LoopFling.Targets[1].Name .. (#LoopFling.Targets > 1 and (" 외 "..(#LoopFling.Targets-1).."명") or "")
+        StatusLabel.TextColor3 = Theme.Orange
+    elseif Stand.Enabled and Stand.Target then
+        StatusLabel.Text = "Stand → " .. Stand.Target.Name
+        StatusLabel.TextColor3 = Theme.Purple
+    elseif TPA.Running then
+        StatusLabel.Text = "TPA 실행 중..."
+        StatusLabel.TextColor3 = Theme.Accent
+    else
+        StatusLabel.Text = "상태: 대기"
+        StatusLabel.TextColor3 = Theme.SubText
+    end
+
+    TPABtn.Text = TPA.Running and "■ TPA 중지" or "▶ Teleport All (TPA)"
+    TPABtn.BackgroundColor3 = TPA.Running and Theme.Off or Theme.Accent
+
+    if Whitelist.ShowList then
+        WhitelistBtn.Text = "● 화이트리스트 목록 ON"
+        WhitelistBtn.BackgroundColor3 = Theme.On
+        WLPanel.Visible = true
+        refreshWhitelistPanel()
+    else
+        WhitelistBtn.Text = "○ 화이트리스트 목록 OFF"
+        WhitelistBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+        WLPanel.Visible = false
+    end
+end
+
+-- //======= 이벤트 =======//
 AttachBtn.MouseButton1Click:Connect(function()
     if Attach.Enabled then
         Attach.Stop()
-        refreshUI()
-        return
-    end
-
-    local query = NameBox.Text
-    local target = findPlayer(query)
-    if not target then
-        StatusLabel.Text = "플레이어를 찾을 수 없음 (2글자 이상)"
-        StatusLabel.TextColor3 = Theme.Off
-        return
-    end
-
-    local ok = Attach.Start(target)
-    if ok then
-        refreshUI()
     else
-        StatusLabel.Text = "Attach 실패"
-        StatusLabel.TextColor3 = Theme.Off
+        local t = findPlayer(NameBox.Text)
+        if not t then
+            StatusLabel.Text = "플레이어를 찾을 수 없음"
+            StatusLabel.TextColor3 = Theme.Off
+            return
+        end
+        Attach.Start(t)
     end
+    refreshUI()
 end)
 
 InvisBtn.MouseButton1Click:Connect(function()
@@ -876,25 +1589,119 @@ GodBtn.MouseButton1Click:Connect(function()
     refreshUI()
 end)
 
--- 대상이 나갔을 때 정리
+AntiVoidBtn.MouseButton1Click:Connect(function()
+    AntiVoid.Toggle()
+    refreshUI()
+end)
+
+LoopFlingBtn.MouseButton1Click:Connect(function()
+    if LoopFling.Enabled then
+        LoopFling.Stop()
+    else
+        local t = findPlayer(NameBox.Text)
+        if not t then
+            StatusLabel.Text = "LoopFling 대상 필요"
+            StatusLabel.TextColor3 = Theme.Off
+            return
+        end
+        LoopFling.Start(t)
+    end
+    refreshUI()
+end)
+
+StandBtn.MouseButton1Click:Connect(function()
+    if Stand.Enabled then
+        Stand.Stop()
+    else
+        local t = findPlayer(NameBox.Text)
+        if not t then
+            StatusLabel.Text = "Stand 대상 필요"
+            StatusLabel.TextColor3 = Theme.Off
+            return
+        end
+        Stand.Start(t, true) -- Follow
+    end
+    refreshUI()
+end)
+
+StandDontBtn.MouseButton1Click:Connect(function()
+    if Stand.Enabled then
+        Stand.Stop()
+    else
+        local t = findPlayer(NameBox.Text)
+        if not t then
+            StatusLabel.Text = "Stand 대상 필요"
+            StatusLabel.TextColor3 = Theme.Off
+            return
+        end
+        Stand.Start(t, false) -- Don't Follow
+    end
+    refreshUI()
+end)
+
+TPABtn.MouseButton1Click:Connect(function()
+    if TPA.Running then
+        TPA.Stop()
+    else
+        TPA.Start()
+    end
+    refreshUI()
+end)
+
+WhitelistBtn.MouseButton1Click:Connect(function()
+    Whitelist.ShowList = not Whitelist.ShowList
+    refreshUI()
+end)
+
+StopAllBtn.MouseButton1Click:Connect(function()
+    Attach.Stop()
+    Invis.SetEnabled(false)
+    God.Disable()
+    if AntiVoid.Enabled then AntiVoid.Toggle() end
+    LoopFling.Stop()
+    Stand.Stop()
+    TPA.Stop()
+    refreshUI()
+    notify("TSB", "모든 기능 중지됨", 2)
+end)
+
 Players.PlayerRemoving:Connect(function(plr)
-    if Attach.Target == plr then
-        Attach.Stop()
+    if Attach.Target == plr then Attach.Stop() end
+    if Stand.Target == plr then Stand.Stop() end
+    if LoopFling.Enabled then
+        for i, t in ipairs(LoopFling.Targets) do
+            if t == plr then
+                table.remove(LoopFling.Targets, i)
+                break
+            end
+        end
+        if #LoopFling.Targets == 0 then LoopFling.Stop() end
+    end
+    refreshUI()
+end)
+
+-- 주기적 UI 갱신
+task.spawn(function()
+    while ScreenGui and ScreenGui.Parent do
         refreshUI()
+        task.wait(0.5)
     end
 end)
 
--- 초기 UI
 refreshUI()
 
--- 외부에서 제어할 수 있도록 노출
 getgenv().TSB_Combined = {
     Attach = Attach,
     Invis = Invis,
     God = God,
+    AntiVoid = AntiVoid,
+    LoopFling = LoopFling,
+    Stand = Stand,
+    TPA = TPA,
+    Whitelist = Whitelist,
     RefreshUI = refreshUI,
     FindPlayer = findPlayer,
     Gui = ScreenGui,
 }
 
-print("[TSB Combined] Godmode + Invis + Attach UI loaded")
+print("[TSB Combined v2] Loaded — God + Invis + Attach + AntiVoid + LoopFling + Stand + TPA")
