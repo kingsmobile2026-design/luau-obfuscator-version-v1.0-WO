@@ -1031,7 +1031,7 @@ function TPA.Start()
             return
         end
 
-        -- 공허: Heartbeat마다 Y=-100 CFrame 고정
+        -- 공허: Heartbeat마다 Y=-10000 CFrame 고정
         notify("TPA", #list .. "명 완료 → 공허 Heartbeat 고정", 1.5)
 
         getgenv().TPA_Voiding = true
