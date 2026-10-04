@@ -1041,7 +1041,7 @@ function TPA.Start()
             notify("TPA", "안티보이드 자동 ON", 1)
         end
 
-        local voidY = TPA.Settings.voidY or -100
+        local voidY = TPA.Settings.voidY or -10000
         local voidDur = TPA.Settings.voidDuration or 1.2
         local voidCF = CFrame.new(0, voidY, 0)
 
