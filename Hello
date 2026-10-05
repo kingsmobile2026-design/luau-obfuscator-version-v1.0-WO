@@ -990,13 +990,17 @@ local KillFarm = {
 
 local function getLowestHPPlayer()
     local best, bestHP = nil, math.huge
-    for _, plr in ipairs(Players:GetPlayers()) do
+    local black = Blacklist.GetPlayers()
+    local pool = (#black > 0) and black or Players:GetPlayers()
+    for _, plr in ipairs(pool) do
         if plr ~= LocalPlayer and not Whitelist.IsWhitelisted(plr) then
-            local char = plr.Character
-            local hum = char and char:FindFirstChildOfClass("Humanoid")
-            if hum and hum.Health > 0 and hum.Health < bestHP then
-                bestHP = hum.Health
-                best = plr
+            if #black > 0 or not Blacklist.IsBlacklisted or true then
+                local char = plr.Character
+                local hum = char and char:FindFirstChildOfClass("Humanoid")
+                if hum and hum.Health > 0 and hum.Health < bestHP then
+                    bestHP = hum.Health
+                    best = plr
+                end
             end
         end
     end
@@ -1090,12 +1094,15 @@ function SafetyPlatform.TeleportTo(duration)
     return true
 end
 
--- //======= BLINK 모듈 =======//
+-- //======= BLINK 모듈 (내 애니메이션 기준) =======//
+-- 내가 제외 목록이 아닌 애니를 취하면 타겟에 붙었다가 애니 끝나면 복귀
+-- 제외: 7815618175, 10470389827, 14516273501 (내 애니 기준)
 local Blink = {
     Enabled = false,
     Busy = false,
     PreferredTarget = nil,
-    Conns = {},
+    CharConn = nil,
+    AnimConn = nil,
     ExcludeIds = {
         ["7815618175"] = true,
         ["10470389827"] = true,
@@ -1110,6 +1117,26 @@ local function isExcludedAnim(animId)
 end
 
 local function getBlinkTarget()
+    -- 블랙리스트 우선
+    local blacks = Blacklist.GetPlayers()
+    if #blacks > 0 then
+        -- 가장 가까운 블랙리스트
+        local myHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if myHRP then
+            local best, bestD = nil, math.huge
+            for _, plr in ipairs(blacks) do
+                if plr.Character then
+                    local h = plr.Character:FindFirstChild("HumanoidRootPart")
+                    if h then
+                        local d = (h.Position - myHRP.Position).Magnitude
+                        if d < bestD then bestD, best = d, plr end
+                    end
+                end
+            end
+            if best then return best end
+        end
+        return blacks[1]
+    end
     if Attach.Enabled and Attach.Target and Attach.Target.Parent == Players then
         return Attach.Target
     end
@@ -1121,7 +1148,7 @@ local function getBlinkTarget()
     if not myHRP then return nil end
     local best, bestDist = nil, math.huge
     for _, plr in ipairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer and plr.Character then
+        if plr ~= LocalPlayer and plr.Character and not Whitelist.IsWhitelisted(plr) then
             local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
             if hrp then
                 local d = (hrp.Position - myHRP.Position).Magnitude
@@ -1165,55 +1192,41 @@ local function blinkAttachUntilStopped(track, target)
     Blink.Busy = false
 end
 
-local function hookPlayerAnims(plr)
-    if plr == LocalPlayer or Blink.Conns[plr] then return end
-    Blink.Conns[plr] = {}
-    local function onChar(char)
-        if not Blink.Enabled then return end
-        local hum = char:WaitForChild("Humanoid", 5)
-        if not hum then return end
-        local animator = hum:FindFirstChildOfClass("Animator") or Instance.new("Animator", hum)
-        if Blink.Conns[plr].animConn then pcall(function() Blink.Conns[plr].animConn:Disconnect() end) end
-        Blink.Conns[plr].animConn = animator.AnimationPlayed:Connect(function(track)
-            if not Blink.Enabled or Blink.Busy then return end
-            if not track or not track.Animation then return end
-            if isExcludedAnim(track.Animation.AnimationId) then return end
-            local target = getBlinkTarget()
-            if target then task.spawn(blinkAttachUntilStopped, track, target) end
-        end)
+local function hookLocalAnims(char)
+    if Blink.AnimConn then pcall(function() Blink.AnimConn:Disconnect() end) Blink.AnimConn = nil end
+    if not char then return end
+    local hum = char:WaitForChild("Humanoid", 5)
+    if not hum then return end
+    local animator = hum:FindFirstChildOfClass("Animator")
+    if not animator then
+        animator = Instance.new("Animator")
+        animator.Parent = hum
     end
-    if plr.Character then task.spawn(onChar, plr.Character) end
-    Blink.Conns[plr].charConn = plr.CharacterAdded:Connect(onChar)
-end
-
-local function unhookPlayer(plr)
-    local c = Blink.Conns[plr]
-    if not c then return end
-    if c.animConn then pcall(function() c.animConn:Disconnect() end) end
-    if c.charConn then pcall(function() c.charConn:Disconnect() end) end
-    Blink.Conns[plr] = nil
+    Blink.AnimConn = animator.AnimationPlayed:Connect(function(track)
+        if not Blink.Enabled or Blink.Busy then return end
+        if not track or not track.Animation then return end
+        -- 제외된 애니는 무시 (내가 취하는 애니 기준)
+        if isExcludedAnim(track.Animation.AnimationId) then return end
+        local target = getBlinkTarget()
+        if target then task.spawn(blinkAttachUntilStopped, track, target) end
+    end)
 end
 
 function Blink.Start()
     if Blink.Enabled then return end
     Blink.Enabled = true
-    for _, plr in ipairs(Players:GetPlayers()) do hookPlayerAnims(plr) end
-    if not Blink.PlayerAddedConn then
-        Blink.PlayerAddedConn = Players.PlayerAdded:Connect(function(plr)
-            if Blink.Enabled then hookPlayerAnims(plr) end
-        end)
-        Blink.PlayerRemovingConn = Players.PlayerRemoving:Connect(function(plr)
-            unhookPlayer(plr)
-            if Blink.PreferredTarget == plr then Blink.PreferredTarget = nil end
-        end)
-    end
-    notify("Blink", "Blink ON", 2)
+    if LocalPlayer.Character then task.spawn(hookLocalAnims, LocalPlayer.Character) end
+    if Blink.CharConn then pcall(function() Blink.CharConn:Disconnect() end) end
+    Blink.CharConn = LocalPlayer.CharacterAdded:Connect(function(c)
+        if Blink.Enabled then task.spawn(hookLocalAnims, c) end
+    end)
+    notify("Blink", "Blink ON (내 애니 기준)", 2)
 end
 
 function Blink.Stop()
     Blink.Enabled = false
     Blink.Busy = false
-    for plr in pairs(Blink.Conns) do unhookPlayer(plr) end
+    if Blink.AnimConn then pcall(function() Blink.AnimConn:Disconnect() end) Blink.AnimConn = nil end
     notify("Blink", "Blink OFF", 2)
 end
 
@@ -1318,56 +1331,22 @@ TPA = {
     Thread = nil,
     VoidConn = nil,
     Settings = {
-        attachTime   = 0.4,   -- 상대에게 붙는 시간 (0.4초)
-        voidTime     = 0.1,   -- 공허에 있는 시간 (0.1초)
-        repeatCount  = 7,     -- 붙기/공허 반복 횟수 (7회)
-        maxTargets   = 7,     -- 최대 대상 수 (서버 7명 미만이면 전체)
+        attachTime   = 0.3,   -- 대상당 어태치 시간
+        maxTargets   = 10,    -- 최대 대상 (서버 10명 미만이면 전체)
         excludeSelf  = true,
         randomOrder  = false,
         voidY        = -10000,
-        voidDuration = 4,     -- 단독 공허 TP 지속시간
+        voidDuration = 4,
     }
 }
 
--- 단일 대상에게 0.4초 붙기 → 0.1초 공허 를 repeatCount 회 반복
--- useAttach == true  : Attach 로 붙기
--- useAttach == false : TP 만 (마지막 대상)
-local function runTargetCycle(plr, useAttach)
-    local S = TPA.Settings
-    local attachTime = S.attachTime
-    local voidTime = S.voidTime
-    local repeatCount = S.repeatCount
-
-    for rep = 1, repeatCount do
-        if not TPA.Running then return end
-        if not (plr and plr.Parent == Players and plr.Character) then return end
-
-        if useAttach then
-            Attach.Start(plr)
-            task.wait(attachTime)
-        else
-            -- 마지막 대상: TP 만
-            Attach.Stop()
-            local myChar = LocalPlayer.Character
-            local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
-            local theirHRP = plr.Character:FindFirstChild("HumanoidRootPart")
-            if myHRP and theirHRP then
-                pcall(setPhysicsRep, myHRP, nil)
-                myHRP.CFrame = theirHRP.CFrame
-                myHRP.AssemblyLinearVelocity = Vector3.zero
-                myHRP.AssemblyAngularVelocity = Vector3.zero
-            end
-            task.wait(attachTime)
-        end
-
-        if not TPA.Running then return end
-
-        -- 공허로 이동 (0.1초)
-        Attach.Stop()
-        VoidTP.Start(voidTime, true)
-        task.wait(voidTime)
-        VoidTP.Stop()
-    end
+-- 대상 1명: 0.3초 어태치만 (공허 반복 없음)
+local function attachOnce(plr, duration)
+    duration = duration or 0.3
+    if not (plr and plr.Parent == Players and plr.Character) then return end
+    Attach.Start(plr)
+    task.wait(duration)
+    Attach.Stop()
 end
 
 function TPA.Start()
@@ -1391,16 +1370,14 @@ function TPA.Start()
         local list = {}
         local blacklistedList = Blacklist.GetPlayers()
 
-        -- 블랙리스트 등록 인원이 한 명이라도 있을 경우 무조건 그 사람들만 대상으로 수행
         if #blacklistedList > 0 then
             list = blacklistedList
-            notify("TPA", "블랙리스트 유저 " .. #list .. "명 우선 TPA 실행 (무조건)", 2)
+            notify("TPA", "블랙리스트 " .. #list .. "명만 대상", 2)
         else
             local seen = {}
             local skipped = 0
             for _, plr in ipairs(Players:GetPlayers()) do
                 if TPA.Settings.excludeSelf and plr == LocalPlayer then
-                    -- skip self
                 elseif Whitelist.IsWhitelisted(plr) then
                     skipped = skipped + 1
                 elseif not seen[plr.UserId] then
@@ -1409,23 +1386,13 @@ function TPA.Start()
                 end
             end
             if skipped > 0 then
-                notify("TPA", "화이트리스트 " .. skipped .. "명 스킵", 1.5)
+                notify("TPA", "화이트리스트 " .. skipped .. "명 제외", 1.5)
             end
 
-            if TPA.Settings.randomOrder then
-                for i = #list, 2, -1 do
-                    local j = math.random(1, i)
-                    list[i], list[j] = list[j], list[i]
-                end
-            end
-
-            -- 서버 인원이 maxTargets(7) 미만이면 서버 전체를 대상으로 함
-            local maxN = TPA.Settings.maxTargets or 7
+            local maxN = TPA.Settings.maxTargets or 10
             if #list > maxN then
                 local trimmed = {}
-                for i = 1, maxN do
-                    trimmed[i] = list[i]
-                end
+                for i = 1, maxN do trimmed[i] = list[i] end
                 list = trimmed
             end
         end
@@ -1437,19 +1404,19 @@ function TPA.Start()
             return
         end
 
-        notify("TPA", #list .. "명 처리 · 대상당 붙기 0.4s / 공허 0.1s ×7 (마지막은 TP)", 2.5)
+        local attachTime = TPA.Settings.attachTime or 0.3
+        notify("TPA", #list .. "명 · 각 0.3s 어태치 순차", 2)
 
-        for i, plr in ipairs(list) do
+        for _, plr in ipairs(list) do
             if not TPA.Running then break end
-            if not (plr and plr.Parent == Players and plr.Character) then continue end
-            local isLast = (i == #list)
-            -- 마지막 대상은 attach 대신 TP 만, 공허는 위 조건과 동일
-            runTargetCycle(plr, not isLast)
+            if plr and plr.Parent == Players and plr.Character then
+                attachOnce(plr, attachTime)
+            end
         end
 
         Attach.Stop()
         VoidTP.Stop()
-        task.wait(0.1)
+        task.wait(0.05)
 
         if not TPA.Running then
             getgenv().TpaRunning = false
@@ -1457,14 +1424,16 @@ function TPA.Start()
             return
         end
 
-        -- 원래 위치로 복귀
+        -- 종료: 안전 플랫폼
+        notify("TPA", "안전 플랫폼 TP", 1.5)
+        SafetyPlatform.TeleportTo(2.5)
+
         local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
         if hrp and returnCF then
-            for _ = 1, 6 do
+            for _ = 1, 4 do
                 if hrp and hrp.Parent then
                     hrp.CFrame = returnCF
                     hrp.AssemblyLinearVelocity = Vector3.zero
-                    hrp.AssemblyAngularVelocity = Vector3.zero
                 end
                 RunService.Heartbeat:Wait()
             end
@@ -1473,11 +1442,12 @@ function TPA.Start()
         TPA.Running = false
         getgenv().TpaRunning = false
         if getgenv().delvape then pcall(getgenv().delvape, "teleportallgui") end
-        notify("TPA", "Attach All 완료 (" .. #list .. "명)", 2)
+        notify("TPA", "완료 (" .. #list .. "명)", 2)
     end)
 
     return true
 end
+
 
 function TPA.Stop()
     TPA.Running = false
@@ -1845,7 +1815,7 @@ local Hint = Instance.new("TextLabel")
 Hint.Size = UDim2.new(1, -16, 0, 46)
 Hint.Position = UDim2.fromOffset(8, 510)
 Hint.BackgroundTransparency = 1
-Hint.Text = ".화이트/.블랙 닉네임 · 블랙리스트 존재시 TPA는 그 유저만 (무조건)\nTPA: 상대 0.4s 붙기 → 0.1s 공허 ×7 (마지막은 TP) · 서버 7명 미만이면 전체\n공허 TP: HRP/PhysicsRepRootPart/PhysicsRepRootRef Heartbeat TP · CFrame 핵 감지기"
+Hint.Text = ".화이트/.블랙 닉네임 · 블랙리스트 존재시 TPA는 그 유저만 (무조건)\nTPA: 최대10명 각 0.3s 어태치 · 화이트 제외 · 블랙 우선 · 종료시 안전플랫폼\n공허 TP: HRP/PhysicsRepRootPart/PhysicsRepRootRef Heartbeat TP · CFrame 핵 감지기"
 Hint.TextColor3 = Theme.SubText
 Hint.Font = Enum.Font.Gotham
 Hint.TextSize = 10
