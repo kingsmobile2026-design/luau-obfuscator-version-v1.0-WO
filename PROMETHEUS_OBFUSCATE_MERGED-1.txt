@@ -1,0 +1,4309 @@
+-- This Script is Part of the Prometheus Obfuscator by levno-710
+-- WrapInFunction.lua
+-- This Script provides a Simple Obfuscation Step that wraps the entire Script into a function
+
+local Step = require("prometheus.step");
+local Ast = require("prometheus.ast");
+local Scope = require("prometheus.scope");
+
+local WrapInFunction = Step:extend();
+WrapInFunction.Description = "This Step Wraps the Entire Script into a Function";
+WrapInFunction.Name = "Wrap in Function";
+
+WrapInFunction.SettingsDescriptor = {
+Iterations = {
+name = "Iterations",
+description = "The Number Of Iterations",
+type = "number",
+default = 1,
+min = 1,
+max = nil,
+}
+}
+
+function WrapInFunction:init(_) end
+
+function WrapInFunction:apply(ast)
+for i = 1, self.Iterations, 1 do
+local body = ast.body;
+
+local scope = Scope:new(ast.globalScope);
+body.scope:setParent(scope);
+
+ast.body = Ast.Block({
+Ast.ReturnStatement({
+Ast.FunctionCallExpression(Ast.FunctionLiteralExpression({Ast.VarargExpression()}, body), {Ast.VarargExpression()})
+});
+}, scope);
+end
+end
+
+return WrapInFunction;-- This Script is Part of the Prometheus Obfuscator by levno-710
+-- WatermarkCheck.lua
+-- This Script provides a Step that will add a watermark to the script
+
+local Step = require("prometheus.step");
+local Ast = require("prometheus.ast");
+local Scope = require("prometheus.scope");
+local Watermark = require("prometheus.steps.Watermark");
+
+local WatermarkCheck = Step:extend();
+WatermarkCheck.Description = "This Step will add a watermark to the script";
+WatermarkCheck.Name = "WatermarkCheck";
+
+WatermarkCheck.SettingsDescriptor = {
+Content = {
+name = "Content",
+description = "The Content of the WatermarkCheck",
+type = "string",
+default = "This Script is Part of the Prometheus Obfuscator by levno-710",
+},
+}
+
+local function callNameGenerator(generatorFunction, ...)
+if(type(generatorFunction) == "table") then
+generatorFunction = generatorFunction.generateName;
+end
+return generatorFunction(...);
+end
+
+function WatermarkCheck:init(_) end
+
+function WatermarkCheck:apply(ast, pipeline)
+self.CustomVariable = "_" .. callNameGenerator(pipeline.namegenerator, math.random(10000000000, 100000000000));
+pipeline:addStep(Watermark:new(self));
+
+local body = ast.body;
+local watermarkExpression = Ast.StringExpression(self.Content);
+local scope, variable = ast.globalScope:resolve(self.CustomVariable);
+local watermark = Ast.VariableExpression(ast.globalScope, variable);
+local notEqualsExpression = Ast.NotEqualsExpression(watermark, watermarkExpression);
+local ifBody = Ast.Block({Ast.ReturnStatement({})}, Scope:new(ast.body.scope));
+
+table.insert(body.statements, 1, Ast.IfStatement(notEqualsExpression, ifBody, {}, nil));
+end
+
+return WatermarkCheck;-- This Script is Part of the Prometheus Obfuscator by levno-710
+-- Watermark.lua
+-- This Script provides a Step that will add a watermark to the script
+
+local Step = require("prometheus.step");
+local Ast = require("prometheus.ast");
+local Scope = require("prometheus.scope");
+
+local Watermark = Step:extend();
+Watermark.Description = "This Step will add a watermark to the script";
+Watermark.Name = "Watermark";
+
+Watermark.SettingsDescriptor = {
+Content = {
+name = "Content",
+description = "The Content of the Watermark",
+type = "string",
+default = "This Script is Part of the Prometheus Obfuscator by levno-710",
+},
+CustomVariable = {
+name = "Custom Variable",
+description = "The Variable that will be used for the Watermark",
+type = "string",
+default = "_WATERMARK",
+}
+}
+
+function Watermark:init(settings)
+
+end
+
+function Watermark:apply(ast)
+local body = ast.body;
+if string.len(self.Content) > 0 then
+local scope, variable = ast.globalScope:resolve(self.CustomVariable);
+local watermark = Ast.AssignmentVariable(ast.globalScope, variable);
+
+local functionScope = Scope:new(body.scope);
+functionScope:addReferenceToHigherScope(ast.globalScope, variable);
+
+local arg = functionScope:addVariable();
+local statement = Ast.PassSelfFunctionCallStatement(Ast.StringExpression(self.Content), "gsub", {
+Ast.StringExpression(".+"),
+Ast.FunctionLiteralExpression({
+Ast.VariableExpression(functionScope, arg)
+}, Ast.Block({
+Ast.AssignmentStatement({
+watermark
+}, {
+Ast.VariableExpression(functionScope, arg)
+})
+}, functionScope))
+});
+
+table.insert(ast.body.statements, 1, statement)
+end
+end
+
+return Watermark;-- This Script is Part of the Prometheus Obfuscator by levno-710
+-- This Script is Part of the Prometheus Obfuscator by levno-710
+-- Vmify.lua (Syntax Fixed + Basic Polymorphic Support)
+
+local Step = require("prometheus.step")
+local Compiler = require("prometheus.compiler.compiler")
+
+local Vmify = Step:extend()
+Vmify.Description = "Compiles the script into fully-custom bytecode with randomized opcode mapping."
+Vmify.Name = "Vmify"
+
+Vmify.SettingsDescriptor = {}
+
+function Vmify:init(_) end
+
+function Vmify:apply(ast, pipeline)
+local compiler = Compiler:new()
+
+-- Basic polymorphic support: shuffle opcode keys if available
+if compiler.opcodes and type(compiler.opcodes) == "table" then
+local keys = {}
+for k, _ in pairs(compiler.opcodes) do
+table.insert(keys, k)
+end
+for i = #keys, 2, -1 do
+local j = math.random(i)
+keys[i], keys[j] = keys[j], keys[i]
+end
+-- Note: full polymorphic ISA requires compiler internals support
+end
+
+return compiler:compile(ast)
+end
+
+return Vmify
+
+-- SplitStrings.lua
+-- This Script provides a Simple Obfuscation Step for splitting Strings
+
+local Step = require("prometheus.step");
+local Ast = require("prometheus.ast");
+local visitAst = require("prometheus.visitast");
+local Parser = require("prometheus.parser");
+local util = require("prometheus.util");
+local enums = require("prometheus.enums")
+
+local LuaVersion = enums.LuaVersion;
+
+local SplitStrings = Step:extend();
+SplitStrings.Description = "This Step splits Strings to a specific or random length";
+SplitStrings.Name = "Split Strings";
+
+SplitStrings.SettingsDescriptor = {
+Threshold = {
+name = "Threshold",
+description = "The relative amount of nodes that will be affected",
+type = "number",
+default = 1,
+min = 0,
+max = 1,
+},
+MinLength = {
+name = "MinLength",
+description = "The minimal length for the chunks in that the Strings are splitted",
+type = "number",
+default = 5,
+min = 1,
+max = nil,
+},
+MaxLength = {
+name = "MaxLength",
+description = "The maximal length for the chunks in that the Strings are splitted",
+type = "number",
+default = 5,
+min = 1,
+max = nil,
+},
+ConcatenationType = {
+name = "ConcatenationType",
+description = "The Functions used for Concatenation. Note that when using custom, the String Array will also be Shuffled",
+type = "enum",
+values = {
+"strcat",
+"table",
+"custom",
+},
+default = "custom",
+},
+CustomFunctionType = {
+name = "CustomFunctionType",
+description = "The Type of Function code injection This Option only applies when custom Concatenation is selected.
+ Note that when choosing inline, the code size may increase significantly!",
+type = "enum",
+values = {
+"global",
+"local",
+"inline",
+},
+default = "global",
+},
+CustomLocalFunctionsCount = {
+name = "CustomLocalFunctionsCount",
+description = "The number of local functions per scope. This option only applies when CustomFunctionType = local",
+type = "number",
+default = 2,
+min = 1,
+}
+}
+
+function SplitStrings:init(settings) end
+
+local function generateTableConcatNode(chunks, data)
+local chunkNodes = {};
+for i, chunk in ipairs(chunks) do
+table.insert(chunkNodes, Ast.TableEntry(Ast.StringExpression(chunk)));
+end
+local tb = Ast.TableConstructorExpression(chunkNodes);
+data.scope:addReferenceToHigherScope(data.tableConcatScope, data.tableConcatId);
+return Ast.FunctionCallExpression(Ast.VariableExpression(data.tableConcatScope, data.tableConcatId), {tb});
+end
+
+local function generateStrCatNode(chunks)
+-- Put Together Expression for Concatenating String
+local generatedNode = nil;
+for i, chunk in ipairs(chunks) do
+if generatedNode then
+generatedNode = Ast.StrCatExpression(generatedNode, Ast.StringExpression(chunk));
+else
+generatedNode = Ast.StringExpression(chunk);
+end
+end
+return generatedNode
+end
+
+local customVariants = 2;
+local custom1Code = [=[
+function custom(table)
+local stringTable, str = table[#table], "";
+for i=1,#stringTable, 1 do
+str = str .. stringTable[table[i]];
+end
+return str
+end
+]=];
+
+local custom2Code = [=[
+function custom(tb)
+local str = "";
+for i=1, #tb / 2, 1 do
+str = str .. tb[#tb / 2 + tb[i]];
+end
+return str
+end
+]=];
+
+local function generateCustomNodeArgs(chunks, data, variant)
+local shuffled = {};
+local shuffledIndices = {};
+for i = 1, #chunks, 1 do
+shuffledIndices[i] = i;
+end
+util.shuffle(shuffledIndices);
+
+for i, v in ipairs(shuffledIndices) do
+shuffled[v] = chunks[i];
+end
+
+-- Custom Function Type 1
+if variant == 1 then
+local args = {};
+local tbNodes = {};
+
+for i, v in ipairs(shuffledIndices) do
+table.insert(args, Ast.TableEntry(Ast.NumberExpression(v)));
+end
+
+for i, chunk in ipairs(shuffled) do
+table.insert(tbNodes, Ast.TableEntry(Ast.StringExpression(chunk)));
+end
+
+local tb = Ast.TableConstructorExpression(tbNodes);
+
+table.insert(args, Ast.TableEntry(tb));
+return {Ast.TableConstructorExpression(args)};
+
+-- Custom Function Type 2
+else
+
+local args = {};
+for i, v in ipairs(shuffledIndices) do
+table.insert(args, Ast.TableEntry(Ast.NumberExpression(v)));
+end
+for i, chunk in ipairs(shuffled) do
+table.insert(args, Ast.TableEntry(Ast.StringExpression(chunk)));
+end
+return {Ast.TableConstructorExpression(args)};
+end
+
+end
+
+local function generateCustomFunctionLiteral(parentScope, variant)
+local parser = Parser:new({
+LuaVersion = LuaVersion.Lua51;
+});
+
+-- Custom Function Type 1
+if variant == 1 then
+local funcDeclNode = parser:parse(custom1Code).body.statements[1];
+local funcBody = funcDeclNode.body;
+local funcArgs = funcDeclNode.args;
+funcBody.scope:setParent(parentScope);
+return Ast.FunctionLiteralExpression(funcArgs, funcBody);
+
+-- Custom Function Type 2
+else
+local funcDeclNode = parser:parse(custom2Code).body.statements[1];
+local funcBody = funcDeclNode.body;
+local funcArgs = funcDeclNode.args;
+funcBody.scope:setParent(parentScope);
+return Ast.FunctionLiteralExpression(funcArgs, funcBody);
+end
+end
+
+local function generateGlobalCustomFunctionDeclaration(ast, data)
+local parser = Parser:new({
+LuaVersion = LuaVersion.Lua51;
+});
+
+-- Custom Function Type 1
+if data.customFunctionVariant == 1 then
+local astScope = ast.body.scope;
+local funcDeclNode = parser:parse(custom1Code).body.statements[1];
+local funcBody = funcDeclNode.body;
+local funcArgs = funcDeclNode.args;
+funcBody.scope:setParent(astScope);
+return Ast.LocalVariableDeclaration(astScope, {data.customFuncId},
+{Ast.FunctionLiteralExpression(funcArgs, funcBody)});
+-- Custom Function Type 2
+else
+local astScope = ast.body.scope;
+local funcDeclNode = parser:parse(custom2Code).body.statements[1];
+local funcBody = funcDeclNode.body;
+local funcArgs = funcDeclNode.args;
+funcBody.scope:setParent(astScope);
+return Ast.LocalVariableDeclaration(data.customFuncScope, {data.customFuncId},
+{Ast.FunctionLiteralExpression(funcArgs, funcBody)});
+end
+end
+
+function SplitStrings:variant()
+return math.random(1, customVariants);
+end
+
+function SplitStrings:apply(ast, pipeline)
+local data = {};
+
+if(self.ConcatenationType == "table") then
+local scope = ast.body.scope;
+local id = scope:addVariable();
+data.tableConcatScope = scope;
+data.tableConcatId = id;
+elseif(self.ConcatenationType == "custom") then
+data.customFunctionType = self.CustomFunctionType;
+if data.customFunctionType == "global" then
+local scope = ast.body.scope;
+local id = scope:addVariable();
+data.customFuncScope = scope;
+data.customFuncId = id;
+data.customFunctionVariant = self:variant();
+end
+end
+
+local customLocalFunctionsCount = self.CustomLocalFunctionsCount;
+local self2 = self;
+
+visitAst(ast, function(node, data)
+-- Previsit Function
+
+-- Create Local Function declarations
+if(self.ConcatenationType == "custom" and data.customFunctionType == "local" and node.kind == Ast.AstKind.Block and node.isFunctionBlock) then
+data.functionData.localFunctions = {};
+for i = 1, customLocalFunctionsCount, 1 do
+local scope = data.scope;
+local id = scope:addVariable();
+local variant = self:variant();
+table.insert(data.functionData.localFunctions, {
+scope = scope,
+id = id,
+variant = variant,
+used = false,
+});
+end
+end
+
+end, function(node, data)
+-- PostVisit Function
+
+-- Create actual function literals for local customFunctionType
+if(self.ConcatenationType == "custom" and data.customFunctionType == "local" and node.kind == Ast.AstKind.Block and node.isFunctionBlock) then
+for i, func in ipairs(data.functionData.localFunctions) do
+if func.used then
+local literal = generateCustomFunctionLiteral(func.scope, func.variant);
+table.insert(node.statements, 1, Ast.LocalVariableDeclaration(func.scope, {func.id}, {literal}));
+end
+end
+end
+
+-- Apply Only to String nodes
+if(node.kind == Ast.AstKind.StringExpression) then
+local str = node.value;
+local chunks = {};
+local i = 1;
+
+-- Split String into Parts of length between MinLength and MaxLength
+while i <= string.len(str) do
+local len = math.random(self.MinLength, self.MaxLength);
+table.insert(chunks, string.sub(str, i, i + len - 1));
+i = i + len;
+end
+
+if(#chunks > 1) then
+if math.random() < self.Threshold then
+if self.ConcatenationType == "strcat" then
+node = generateStrCatNode(chunks);
+elseif self.ConcatenationType == "table" then
+node = generateTableConcatNode(chunks, data);
+elseif self.ConcatenationType == "custom" then
+if self.CustomFunctionType == "global" then
+local args = generateCustomNodeArgs(chunks, data, data.customFunctionVariant);
+-- Add Reference for Variable Renaming
+data.scope:addReferenceToHigherScope(data.customFuncScope, data.customFuncId);
+node = Ast.FunctionCallExpression(Ast.VariableExpression(data.customFuncScope, data.customFuncId), args);
+elseif self.CustomFunctionType == "local" then
+local lfuncs = data.functionData.localFunctions;
+local idx = math.random(1, #lfuncs);
+local func = lfuncs[idx];
+local args = generateCustomNodeArgs(chunks, data, func.variant);
+func.used = true;
+-- Add Reference for Variable Renaming
+data.scope:addReferenceToHigherScope(func.scope, func.id);
+node = Ast.FunctionCallExpression(Ast.VariableExpression(func.scope, func.id), args);
+elseif self.CustomFunctionType == "inline" then
+local variant = self:variant();
+local args = generateCustomNodeArgs(chunks, data, variant);
+local literal = generateCustomFunctionLiteral(data.scope, variant);
+node = Ast.FunctionCallExpression(literal, args);
+end
+end
+end
+end
+
+return node, true;
+end
+end, data)
+
+if(self.ConcatenationType == "table") then
+local globalScope = data.globalScope;
+local tableScope, tableId = globalScope:resolve("table")
+ast.body.scope:addReferenceToHigherScope(globalScope, tableId);
+table.insert(ast.body.statements, 1, Ast.LocalVariableDeclaration(data.tableConcatScope, {data.tableConcatId},
+{Ast.IndexExpression(Ast.VariableExpression(tableScope, tableId), Ast.StringExpression("concat"))}));
+elseif(self.ConcatenationType == "custom" and self.CustomFunctionType == "global") then
+table.insert(ast.body.statements, 1, generateGlobalCustomFunctionDeclaration(ast, data));
+end
+end
+
+return SplitStrings;-- This Script is Part of the Prometheus Obfuscator by levno-710
+-- ProxifyLocals.lua
+-- This Script provides a Obfuscation Step for putting all Locals into Proxy Objects
+
+local Step = require("prometheus.step");
+local Ast = require("prometheus.ast");
+local Scope = require("prometheus.scope");
+local visitast = require("prometheus.visitast");
+local RandomLiterals = require("prometheus.randomLiterals")
+
+local AstKind = Ast.AstKind;
+
+local ProxifyLocals = Step:extend();
+ProxifyLocals.Description = "This Step wraps all locals into Proxy Objects";
+ProxifyLocals.Name = "Proxify Locals";
+
+ProxifyLocals.SettingsDescriptor = {
+LiteralType = {
+name = "LiteralType",
+description = "The type of the randomly generated literals",
+type = "enum",
+values = {
+"dictionary",
+"number",
+"string",
+"any",
+},
+default = "string",
+},
+}
+
+local function shallowcopy(orig)
+local orig_type = type(orig)
+local copy
+if orig_type == 'table' then
+copy = {}
+for orig_key, orig_value in pairs(orig) do
+copy[orig_key] = orig_value
+end
+else -- number, string, boolean, etc
+copy = orig
+end
+return copy
+end
+
+local function callNameGenerator(generatorFunction, ...)
+if(type(generatorFunction) == "table") then
+generatorFunction = generatorFunction.generateName;
+end
+return generatorFunction(...);
+end
+
+local MetatableExpressions = {
+{
+constructor = Ast.AddExpression,
+key = "__add";
+},
+{
+constructor = Ast.SubExpression,
+key = "__sub";
+},
+{
+constructor = Ast.IndexExpression,
+key = "__index";
+},
+{
+constructor = Ast.MulExpression,
+key = "__mul";
+},
+{
+constructor = Ast.DivExpression,
+key = "__div";
+},
+{
+constructor = Ast.PowExpression,
+key = "__pow";
+},
+{
+constructor = Ast.StrCatExpression,
+key = "__concat";
+}
+}
+
+function ProxifyLocals:init(_) end
+
+local function generateLocalMetatableInfo(pipeline)
+local usedOps = {};
+local info = {};
+for i, v in ipairs({"setValue", "getValue", "index"}) do
+local rop;
+repeat
+rop = MetatableExpressions[math.random(#MetatableExpressions)];
+until not usedOps[rop];
+usedOps[rop] = true;
+info[v] = rop;
+end
+
+info.valueName = callNameGenerator(pipeline.namegenerator, math.random(1, 4096));
+
+return info;
+end
+
+function ProxifyLocals:CreateAssignmentExpression(info, expr, parentScope)
+local metatableVals = {};
+
+-- Setvalue Entry
+local setValueFunctionScope = Scope:new(parentScope);
+local setValueSelf = setValueFunctionScope:addVariable();
+local setValueArg = setValueFunctionScope:addVariable();
+local setvalueFunctionLiteral = Ast.FunctionLiteralExpression(
+{
+Ast.VariableExpression(setValueFunctionScope, setValueSelf), -- Argument 1
+Ast.VariableExpression(setValueFunctionScope, setValueArg), -- Argument 2
+},
+Ast.Block({ -- Create Function Body
+Ast.AssignmentStatement({
+Ast.AssignmentIndexing(Ast.VariableExpression(setValueFunctionScope, setValueSelf), Ast.StringExpression(info.valueName));
+}, {
+Ast.VariableExpression(setValueFunctionScope, setValueArg)
+})
+}, setValueFunctionScope)
+);
+table.insert(metatableVals, Ast.KeyedTableEntry(Ast.StringExpression(info.setValue.key), setvalueFunctionLiteral));
+
+-- Getvalue Entry
+local getValueFunctionScope = Scope:new(parentScope);
+local getValueSelf = getValueFunctionScope:addVariable();
+local getValueArg = getValueFunctionScope:addVariable();
+local getValueIdxExpr;
+if(info.getValue.key == "__index" or info.setValue.key == "__index") then
+getValueIdxExpr = Ast.FunctionCallExpression(Ast.VariableExpression(getValueFunctionScope:resolveGlobal("rawget")), {
+Ast.VariableExpression(getValueFunctionScope, getValueSelf),
+Ast.StringExpression(info.valueName),
+});
+else
+getValueIdxExpr = Ast.IndexExpression(Ast.VariableExpression(getValueFunctionScope, getValueSelf), Ast.StringExpression(info.valueName));
+end
+local getvalueFunctionLiteral = Ast.FunctionLiteralExpression(
+{
+Ast.VariableExpression(getValueFunctionScope, getValueSelf), -- Argument 1
+Ast.VariableExpression(getValueFunctionScope, getValueArg), -- Argument 2
+},
+Ast.Block({ -- Create Function Body
+Ast.ReturnStatement({
+getValueIdxExpr;
+});
+}, getValueFunctionScope)
+);
+table.insert(metatableVals, Ast.KeyedTableEntry(Ast.StringExpression(info.getValue.key), getvalueFunctionLiteral));
+
+parentScope:addReferenceToHigherScope(self.setMetatableVarScope, self.setMetatableVarId);
+return Ast.FunctionCallExpression(
+Ast.VariableExpression(self.setMetatableVarScope, self.setMetatableVarId),
+{
+Ast.TableConstructorExpression({
+Ast.KeyedTableEntry(Ast.StringExpression(info.valueName), expr)
+}),
+Ast.TableConstructorExpression(metatableVals)
+}
+);
+end
+
+function ProxifyLocals:apply(ast, pipeline)
+local localMetatableInfos = {};
+local function getLocalMetatableInfo(scope, id)
+-- Global Variables should not be transformed
+if(scope.isGlobal) then return nil end;
+
+localMetatableInfos[scope] = localMetatableInfos[scope] or {};
+if localMetatableInfos[scope][id] then
+-- If locked, return no Metatable
+if localMetatableInfos[scope][id].locked then
+return nil
+end
+return localMetatableInfos[scope][id];
+end
+local localMetatableInfo = generateLocalMetatableInfo(pipeline);
+localMetatableInfos[scope][id] = localMetatableInfo;
+return localMetatableInfo;
+end
+
+local function disableMetatableInfo(scope, id)
+-- Global Variables should not be transformed
+if(scope.isGlobal) then return nil end;
+
+localMetatableInfos[scope] = localMetatableInfos[scope] or {};
+localMetatableInfos[scope][id] = {locked = true}
+end
+
+-- Create Setmetatable Variable
+self.setMetatableVarScope = ast.body.scope;
+self.setMetatableVarId = ast.body.scope:addVariable();
+
+-- Create Empty Function Variable
+self.emptyFunctionScope = ast.body.scope;
+self.emptyFunctionId = ast.body.scope:addVariable();
+self.emptyFunctionUsed = false;
+
+-- Add Empty Function Declaration
+table.insert(ast.body.statements, 1, Ast.LocalVariableDeclaration(self.emptyFunctionScope, {self.emptyFunctionId}, {
+Ast.FunctionLiteralExpression({}, Ast.Block({}, Scope:new(ast.body.scope)));
+}));
+
+visitast(ast, function(node, data)
+-- Lock for loop variables
+if(node.kind == AstKind.ForStatement) then
+disableMetatableInfo(node.scope, node.id)
+end
+if(node.kind == AstKind.ForInStatement) then
+for i, id in ipairs(node.ids) do
+disableMetatableInfo(node.scope, id);
+end
+end
+
+-- Lock Function Arguments
+if(node.kind == AstKind.FunctionDeclaration or node.kind == AstKind.LocalFunctionDeclaration or node.kind == AstKind.FunctionLiteralExpression) then
+for i, expr in ipairs(node.args) do
+if expr.kind == AstKind.VariableExpression then
+disableMetatableInfo(expr.scope, expr.id);
+end
+end
+end
+
+-- Assignment Statements may be Obfuscated Differently
+if(node.kind == AstKind.AssignmentStatement) then
+if(#node.lhs == 1 and node.lhs[1].kind == AstKind.AssignmentVariable) then
+local variable = node.lhs[1];
+local localMetatableInfo = getLocalMetatableInfo(variable.scope, variable.id);
+if localMetatableInfo then
+local args = shallowcopy(node.rhs);
+local vexp = Ast.VariableExpression(variable.scope, variable.id);
+vexp.__ignoreProxifyLocals = true;
+args[1] = localMetatableInfo.setValue.constructor(vexp, args[1]);
+self.emptyFunctionUsed = true;
+data.scope:addReferenceToHigherScope(self.emptyFunctionScope, self.emptyFunctionId);
+return Ast.FunctionCallStatement(Ast.VariableExpression(self.emptyFunctionScope, self.emptyFunctionId), args);
+end
+end
+end
+end, function(node, data)
+-- Local Variable Declaration
+if(node.kind == AstKind.LocalVariableDeclaration) then
+for i, id in ipairs(node.ids) do
+local expr = node.expressions[i] or Ast.NilExpression();
+local localMetatableInfo = getLocalMetatableInfo(node.scope, id);
+-- Apply Only to Some Variables if Threshold is non 1
+if localMetatableInfo then
+local newExpr = self:CreateAssignmentExpression(localMetatableInfo, expr, node.scope);
+node.expressions[i] = newExpr;
+end
+end
+end
+
+-- Variable Expression
+if(node.kind == AstKind.VariableExpression and not node.__ignoreProxifyLocals) then
+local localMetatableInfo = getLocalMetatableInfo(node.scope, node.id);
+-- Apply Only to Some Variables if Threshold is non 1
+if localMetatableInfo then
+local literal;
+if self.LiteralType == "dictionary" then
+literal = RandomLiterals.Dictionary();
+elseif self.LiteralType == "number" then
+literal = RandomLiterals.Number();
+elseif self.LiteralType == "string" then
+literal = RandomLiterals.String(pipeline);
+else
+literal = RandomLiterals.Any(pipeline);
+end
+return localMetatableInfo.getValue.constructor(node, literal);
+end
+end
+
+-- Assignment Variable for Assignment Statement
+if(node.kind == AstKind.AssignmentVariable) then
+local localMetatableInfo = getLocalMetatableInfo(node.scope, node.id);
+-- Apply Only to Some Variables if Threshold is non 1
+if localMetatableInfo then
+return Ast.AssignmentIndexing(node, Ast.StringExpression(localMetatableInfo.valueName));
+end
+end
+
+-- Local Function Declaration
+if(node.kind == AstKind.LocalFunctionDeclaration) then
+local localMetatableInfo = getLocalMetatableInfo(node.scope, node.id);
+-- Apply Only to Some Variables if Threshold is non 1
+if localMetatableInfo then
+local funcLiteral = Ast.FunctionLiteralExpression(node.args, node.body);
+local newExpr = self:CreateAssignmentExpression(localMetatableInfo, funcLiteral, node.scope);
+return Ast.LocalVariableDeclaration(node.scope, {node.id}, {newExpr});
+end
+end
+
+-- Function Declaration
+if(node.kind == AstKind.FunctionDeclaration) then
+local localMetatableInfo = getLocalMetatableInfo(node.scope, node.id);
+if(localMetatableInfo) then
+table.insert(node.indices, 1, localMetatableInfo.valueName);
+end
+end
+end)
+
+-- Add Setmetatable Variable Declaration
+table.insert(ast.body.statements, 1, Ast.LocalVariableDeclaration(self.setMetatableVarScope, {self.setMetatableVarId}, {
+Ast.VariableExpression(self.setMetatableVarScope:resolveGlobal("setmetatable"))
+}));
+end
+
+return ProxifyLocals;-- This Script is Part of the Prometheus Obfuscator by levno-710
+-- NumbersToExpressions.lua
+-- This Script provides an Obfuscation Step, that converts Number Literals to expressions.
+-- This step can now also convert numbers to different representations!
+-- Supported representations: hex, binary, scientific, normal. Please note that binary is only supported in Lua 5.2 and above.
+
+unpack = unpack or table.unpack
+
+local Step = require("prometheus.step")
+local Ast = require("prometheus.ast")
+local visitast = require("prometheus.visitast")
+local util = require("prometheus.util")
+local logger = require("logger")
+local AstKind = Ast.AstKind
+
+local NumbersToExpressions = Step:extend()
+NumbersToExpressions.Description = "This Step Converts number Literals to Expressions"
+NumbersToExpressions.Name = "Numbers To Expressions"
+
+NumbersToExpressions.SettingsDescriptor = {
+Threshold = {
+type = "number",
+default = 1,
+min = 0,
+max = 1,
+},
+
+InternalThreshold = {
+type = "number",
+default = 0.2,
+min = 0,
+max = 0.8,
+},
+
+NumberRepresentationMutation = {
+type = "boolean",
+default = false,
+aliases = { "NumberRepresentationMutaton" },
+},
+
+AllowedNumberRepresentations = {
+type = "table",
+default = {"hex", "scientific", "normal"},
+values = {"hex", "binary", "scientific", "normal"},
+},
+}
+
+local function generateModuloExpression(n)
+local rhs = n + math.random(1, 2^24)
+local multiplier = math.random(1, 2^8)
+local lhs = n + (multiplier * rhs)
+return lhs, rhs
+end
+
+local function contains(table, value)
+for _, v in ipairs(table) do
+if v == value then
+return true
+end
+end
+return false
+end
+
+function NumbersToExpressions:init(_)
+self.ExpressionGenerators = {
+function(val, depth) -- Addition
+local val2 = math.random(-2 ^ 20, 2 ^ 20)
+local diff = val - val2
+if tonumber(tostring(diff)) + tonumber(tostring(val2)) ~= val then
+return false
+end
+return Ast.AddExpression(
+self:CreateNumberExpression(val2, depth),
+self:CreateNumberExpression(diff, depth),
+false
+)
+end,
+
+function(val, depth) -- Subtraction
+local val2 = math.random(-2 ^ 20, 2 ^ 20)
+local diff = val + val2
+if tonumber(tostring(diff)) - tonumber(tostring(val2)) ~= val then
+return false
+end
+return Ast.SubExpression(
+self:CreateNumberExpression(diff, depth),
+self:CreateNumberExpression(val2, depth),
+false
+)
+end,
+
+function(val, depth) -- Modulo
+local lhs, rhs = generateModuloExpression(val)
+if tonumber(tostring(lhs)) % tonumber(tostring(rhs)) ~= val then
+return false
+end
+return Ast.ModExpression(
+self:CreateNumberExpression(lhs, depth),
+self:CreateNumberExpression(rhs, depth),
+false
+)
+end,
+}
+end
+
+function NumbersToExpressions:CreateNumberExpression(val, depth)
+if depth > 0 and math.random() >= self.InternalThreshold or depth > 15 then
+local format = self.AllowedNumberRepresentations[math.random(1, #self.AllowedNumberRepresentations)]
+if not self.NumberRepresentationMutation then
+return Ast.NumberExpression(val)
+end
+
+if format == "hex" then
+if val ~= math.floor(val) or val < 0 then
+return Ast.NumberExpression(val)
+end
+local hexStr = string.format("0x%X", val)
+local result = ""
+for i = 1, #hexStr do
+local c = hexStr:sub(i, i)
+if math.random() > 0.5 then
+result = result .. c:upper()
+else
+result = result .. c:lower()
+end
+end
+return Ast.NumberExpression(result)
+end
+
+if format == "binary" then
+if val ~= math.floor(val) or val < 0 then
+return Ast.NumberExpression(val)
+end
+local binary = ""
+local n = val
+if n == 0 then
+binary = "0"
+else
+while n > 0 do
+binary = (n % 2) .. binary
+n = math.floor(n / 2)
+end
+end
+return Ast.NumberExpression("0b" .. binary)
+end
+
+if format == "scientific" then
+if val == 0 then
+return Ast.NumberExpression(val)
+end
+
+local exp = math.floor(math.log10(math.abs(val)))
+local mantissa = val / (10 ^ exp)
+return Ast.NumberExpression(string.format("%.15ge%d", mantissa, exp))
+end
+
+if format == "normal" then
+return Ast.NumberExpression(val)
+end
+end
+
+local generators = util.shuffle({ unpack(self.ExpressionGenerators) })
+for _, generator in ipairs(generators) do
+local node = generator(val, depth + 1)
+if node then
+return node
+end
+end
+return Ast.NumberExpression(val)
+end
+
+function NumbersToExpressions:apply(ast)
+if contains(self.AllowedNumberRepresentations, "binary") then
+logger:warn("Warning: Binary representation is only supported in Lua 5.2 and above!")
+end
+
+visitast(ast, nil, function(node, _)
+if node.kind == AstKind.NumberExpression then
+if math.random() <= self.Threshold then
+return self:CreateNumberExpression(node.value, 0)
+end
+end
+end)
+end
+
+return NumbersToExpressions-- This Script is Part of the Prometheus Obfuscator by levno-710
+-- EncryptStrings.lua
+-- This Script provides a Simple Obfuscation Step that encrypts strings
+
+local Step = require("prometheus.step")
+local Ast = require("prometheus.ast")
+local Parser = require("prometheus.parser")
+local Enums = require("prometheus.enums")
+local visitast = require("prometheus.visitast");
+local util = require("prometheus.util")
+local AstKind = Ast.AstKind;
+
+local EncryptStrings = Step:extend()
+EncryptStrings.Description = "This Step will encrypt strings within your Program."
+EncryptStrings.Name = "Encrypt Strings"
+
+EncryptStrings.SettingsDescriptor = {}
+
+function EncryptStrings:init(_) end
+
+function EncryptStrings:CreateEncryptionService()
+local usedSeeds = {};
+
+local secret_key_6 = math.random(0, 63) -- 6-bit arbitrary integer (0..63)
+local secret_key_7 = math.random(0, 127) -- 7-bit arbitrary integer (0..127)
+local secret_key_44 = math.random(0, 17592186044415) -- 44-bit arbitrary integer (0..17592186044415)
+local secret_key_8 = math.random(0, 255); -- 8-bit arbitrary integer (0..255)
+
+local floor = math.floor
+
+local function primitive_root_257(idx)
+local g, m, d = 1, 128, 2 * idx + 1
+repeat
+g, m, d = g * g * (d >= m and 3 or 1) % 257, m / 2, d % m
+until m < 1
+return g
+end
+
+local param_mul_8 = primitive_root_257(secret_key_7)
+local param_mul_45 = secret_key_6 * 4 + 1
+local param_add_45 = secret_key_44 * 2 + 1
+
+local state_45 = 0
+local state_8 = 2
+
+local prev_values = {}
+local function set_seed(seed_53)
+state_45 = seed_53 % 35184372088832
+state_8 = seed_53 % 255 + 2
+prev_values = {}
+end
+
+local function gen_seed()
+local seed;
+repeat
+seed = math.random(0, 35184372088832);
+until not usedSeeds[seed];
+usedSeeds[seed] = true;
+return seed;
+end
+
+local function get_random_32()
+state_45 = (state_45 * param_mul_45 + param_add_45) % 35184372088832
+repeat
+state_8 = state_8 * param_mul_8 % 257
+until state_8 ~= 1
+local r = state_8 % 32
+local n = floor(state_45 / 2 ^ (13 - (state_8 - r) / 32)) % 2 ^ 32 / 2 ^ r
+return floor(n % 1 * 2 ^ 32) + floor(n)
+end
+
+local function get_next_pseudo_random_byte()
+if #prev_values == 0 then
+local rnd = get_random_32() -- value 0..4294967295
+local low_16 = rnd % 65536
+local high_16 = (rnd - low_16) / 65536
+local b1 = low_16 % 256
+local b2 = (low_16 - b1) / 256
+local b3 = high_16 % 256
+local b4 = (high_16 - b3) / 256
+prev_values = { b1, b2, b3, b4 }
+end
+--print(unpack(prev_values))
+return table.remove(prev_values)
+end
+
+local function encrypt(str)
+local seed = gen_seed();
+set_seed(seed)
+local len = string.len(str)
+local out = {}
+local prevVal = secret_key_8;
+for i = 1, len do
+local byte = string.byte(str, i);
+out[i] = string.char((byte - (get_next_pseudo_random_byte() + prevVal)) % 256);
+prevVal = byte;
+end
+return table.concat(out), seed;
+end
+
+local function genCode()
+local code = [[
+do
+ ]] .. table.concat(util.shuffle{
+"local floor = math.floor",
+"local random = math.random",
+"local remove = table.remove",
+"local char = string.char",
+"local state_45 = 0",
+"local state_8 = 2",
+"local charmap = {}",
+"local nums = {}"
+}, "\n") .. [[
+for i = 1, 256 do
+nums[i] = i;
+end
+
+repeat
+local idx = random(1, #nums);
+local n = remove(nums, idx);
+charmap[n] = char(n - 1);
+until #nums == 0;
+
+local prev_values = {}
+local function get_next_pseudo_random_byte()
+if #prev_values == 0 then
+state_45 = (state_45 * ]] .. tostring(param_mul_45) .. [[ + ]] .. tostring(param_add_45) .. [[) % 35184372088832
+repeat
+state_8 = state_8 * ]] .. tostring(param_mul_8) .. [[ % 257
+until state_8 ~= 1
+local r = state_8 % 32
+local shift = 13 - (state_8 - r) / 32
+local n = floor(state_45 / 2 ^ shift) % 4294967296 / 2 ^ r
+local rnd = floor(n % 1 * 4294967296) + floor(n)
+local low_16 = rnd % 65536
+local high_16 = (rnd - low_16) / 65536
+prev_values = { low_16 % 256, (low_16 - low_16 % 256) / 256, high_16 % 256, (high_16 - high_16 % 256) / 256 }
+end
+
+local prevValuesLen = #prev_values;
+local removed = prev_values[prevValuesLen];
+prev_values[prevValuesLen] = nil;
+return removed;
+end
+
+local realStrings = {};
+STRINGS = setmetatable({}, {
+__index = realStrings;
+__metatable = nil;
+});
+function DECRYPT(str, seed)
+local realStringsLocal = realStrings;
+if(realStringsLocal[seed]) then return seed; else
+prev_values = {};
+local chars = charmap;
+state_45 = seed % 35184372088832
+state_8 = seed % 255 + 2
+local len = #str;
+realStringsLocal[seed] = "";
+local prevVal = ]] .. tostring(secret_key_8) .. [[;
+local s = "";
+for i=1, len, 1 do
+prevVal = (string.byte(str, i) + get_next_pseudo_random_byte() + prevVal) % 256
+s = s .. chars[prevVal + 1];
+end
+realStringsLocal[seed] = s;
+end
+return seed;
+end
+end]]
+
+return code;
+end
+
+return {
+encrypt = encrypt,
+param_mul_45 = param_mul_45,
+param_mul_8 = param_mul_8,
+param_add_45 = param_add_45,
+secret_key_8 = secret_key_8,
+genCode = genCode,
+}
+end
+
+function EncryptStrings:apply(ast, _)
+local Encryptor = self:CreateEncryptionService();
+
+local code = Encryptor.genCode();
+local newAst = Parser:new({ LuaVersion = Enums.LuaVersion.Lua51 }):parse(code);
+local doStat = newAst.body.statements[1];
+
+local scope = ast.body.scope;
+local decryptVar = scope:addVariable();
+local stringsVar = scope:addVariable();
+
+doStat.body.scope:setParent(ast.body.scope);
+
+visitast(newAst, nil, function(node, data)
+if(node.kind == AstKind.FunctionDeclaration) then
+if(node.scope:getVariableName(node.id) == "DECRYPT") then
+data.scope:removeReferenceToHigherScope(node.scope, node.id);
+data.scope:addReferenceToHigherScope(scope, decryptVar);
+node.scope = scope;
+node.id = decryptVar;
+end
+end
+if(node.kind == AstKind.AssignmentVariable or node.kind == AstKind.VariableExpression) then
+if(node.scope:getVariableName(node.id) == "STRINGS") then
+data.scope:removeReferenceToHigherScope(node.scope, node.id);
+data.scope:addReferenceToHigherScope(scope, stringsVar);
+node.scope = scope;
+node.id = stringsVar;
+end
+end
+end)
+
+visitast(ast, nil, function(node, data)
+if(node.kind == AstKind.StringExpression) then
+data.scope:addReferenceToHigherScope(scope, stringsVar);
+data.scope:addReferenceToHigherScope(scope, decryptVar);
+local encrypted, seed = Encryptor.encrypt(node.value);
+return Ast.IndexExpression(Ast.VariableExpression(scope, stringsVar), Ast.FunctionCallExpression(Ast.VariableExpression(scope, decryptVar), {
+Ast.StringExpression(encrypted), Ast.NumberExpression(seed),
+}));
+end
+end)
+
+-- Insert to Main Ast
+table.insert(ast.body.statements, 1, doStat);
+table.insert(ast.body.statements, 1, Ast.LocalVariableDeclaration(scope, util.shuffle{ decryptVar, stringsVar }, {}));
+return ast
+end
+
+return EncryptStrings-- This Script is Part of the Prometheus Obfuscator by levno-710
+-- This Script is Part of the Prometheus Obfuscator by levno-710
+-- ConstantArray.lua (Syntax Fixed)
+
+local Step = require("prometheus.step")
+local Ast = require("prometheus.ast")
+local Scope = require("prometheus.scope")
+local visitast = require("prometheus.visitast")
+local util = require("prometheus.util")
+local Parser = require("prometheus.parser")
+local enums = require("prometheus.enums")
+
+local LuaVersion = enums.LuaVersion
+local AstKind = Ast.AstKind
+
+local ConstantArray = Step:extend()
+ConstantArray.Description = "This Step will Extract all Constants and put them into an Array at the beginning of the script"
+ConstantArray.Name = "Constant Array"
+
+ConstantArray.SettingsDescriptor = {
+Threshold = {
+name = "Threshold",
+description = "The relative amount of nodes that will be affected",
+type = "number",
+default = 1,
+min = 0,
+max = 1,
+aliases = { "Treshold" },
+},
+StringsOnly = {
+name = "StringsOnly",
+description = "Wether to only Extract Strings",
+type = "boolean",
+default = false,
+},
+Shuffle = {
+name = "Shuffle",
+description = "Wether to shuffle the order of Elements in the Array",
+type = "boolean",
+default = true,
+},
+Rotate = {
+name = "Rotate",
+description = "Wether to rotate the String Array by a specific (random) amount. This will be undone on runtime.",
+type = "boolean",
+default = true,
+},
+LocalWrapperThreshold = {
+name = "LocalWrapperThreshold",
+description = "The relative amount of nodes functions, that will get local wrappers",
+type = "number",
+default = 1,
+min = 0,
+max = 1,
+aliases = { "LocalWrapperTreshold" },
+},
+LocalWrapperCount = {
+name = "LocalWrapperCount",
+description = "The number of Local wrapper Functions per scope. This only applies if LocalWrapperThreshold is greater than 0",
+type = "number",
+min = 0,
+max = 512,
+default = 0,
+},
+LocalWrapperArgCount = {
+name = "LocalWrapperArgCount",
+description = "The number of Arguments to the Local wrapper Functions",
+type = "number",
+min = 1,
+default = 10,
+max = 200,
+},
+MaxWrapperOffset = {
+name = "MaxWrapperOffset",
+description = "The Max Offset for the Wrapper Functions",
+type = "number",
+min = 0,
+default = 65535,
+},
+Encoding = {
+name = "Encoding",
+description = "The Encoding to use for the Strings",
+type = "enum",
+default = "mixed",
+values = {
+"none",
+"base64",
+"base85",
+"mixed",
+},
+}
+}
+
+local prefix_0, prefix_1
+local function initPrefixes()
+local charset = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!@£$``%^&*()_+-=[]{}|:;<>,./?"
+repeat
+local a, b = math.random(1, #charset), math.random(1, #charset)
+prefix_0 = charset:sub(a, a)
+prefix_1 = charset:sub(b, b)
+until prefix_0 ~= prefix_1
+end
+
+local function callNameGenerator(generatorFunction, ...)
+if type(generatorFunction) == "table" then
+generatorFunction = generatorFunction.generateName
+end
+return generatorFunction(...)
+end
+
+function ConstantArray:init(_) end
+
+function ConstantArray:createArray()
+local entries = {}
+for i, v in ipairs(self.constants) do
+if type(v) == "string" then
+v = self:encode(v)
+end
+entries[i] = Ast.TableEntry(Ast.ConstantNode(v))
+end
+return Ast.TableConstructorExpression(entries)
+end
+
+function ConstantArray:indexing(index, data)
+if self.LocalWrapperCount > 0 and data.functionData and data.functionData.local_wrappers then
+local wrappers = data.functionData.local_wrappers
+local wrapper = wrappers[math.random(#wrappers)]
+local args = {}
+local ofs = index - self.wrapperOffset - wrapper.offset
+for i = 1, self.LocalWrapperArgCount do
+if i == wrapper.arg then
+args[i] = Ast.NumberExpression(ofs)
+else
+args[i] = Ast.NumberExpression(math.random(ofs - 1024, ofs + 1024))
+end
+end
+data.scope:addReferenceToHigherScope(wrappers.scope, wrappers.id)
+return Ast.FunctionCallExpression(Ast.IndexExpression(
+Ast.VariableExpression(wrappers.scope, wrappers.id),
+Ast.StringExpression(wrapper.index)
+), args)
+else
+data.scope:addReferenceToHigherScope(self.rootScope, self.wrapperId)
+return Ast.FunctionCallExpression(Ast.VariableExpression(self.rootScope, self.wrapperId), {
+Ast.NumberExpression(index - self.wrapperOffset)
+})
+end
+end
+
+function ConstantArray:getConstant(value, data)
+if self.lookup[value] then
+return self:indexing(self.lookup[value], data)
+end
+local idx = #self.constants + 1
+self.constants[idx] = value
+self.lookup[value] = idx
+return self:indexing(idx, data)
+end
+
+function ConstantArray:addConstant(value)
+if self.lookup[value] then
+return
+end
+local idx = #self.constants + 1
+self.constants[idx] = value
+self.lookup[value] = idx
+end
+
+local function reverse(t, i, j)
+while i < j do
+t[i], t[j] = t[j], t[i]
+i, j = i + 1, j - 1
+end
+end
+
+local function rotate(t, d, n)
+n = n or #t
+d = (d or 1) % n
+reverse(t, 1, n)
+reverse(t, 1, d)
+reverse(t, d + 1, n)
+end
+
+function ConstantArray:encode(str)
+if self.Encoding == "base64" then
+return ((str:gsub('.', function(x)
+local r, b = '', x:byte()
+for i = 8, 1, -1 do
+r = r .. (b % 2^i - b % 2^(i-1) > 0 and '1' or '0')
+end
+return r
+end) .. '0000'):gsub('%d%d%d?%d?%d?%d?', function(x)
+if #x < 6 then return '' end
+local c = 0
+for i = 1, 6 do
+c = c + (x:sub(i, i) == '1' and 2^(6 - i) or 0)
+end
+return self.base64chars:sub(c + 1, c + 1)
+end) .. ({ '', '==', '=' })[#str % 3 + 1])
+elseif self.Encoding == "base85" then
+local result = {}
+local len = #str
+local pos = 1
+while pos <= len do
+local rem = len - pos + 1
+local count = rem >= 4 and 4 or rem
+local b1, b2, b3, b4 = string.byte(str, pos, pos + count - 1)
+b1, b2, b3, b4 = b1 or 0, b2 or 0, b3 or 0, b4 or 0
+local value = ((b1 * 256 + b2) * 256 + b3) * 256 + b4
+local chars = {}
+for i = 5, 1, -1 do
+local code = (value % 85) + 1
+chars[i] = self.base85chars:sub(code, code)
+value = math.floor(value / 85)
+end
+result[#result + 1] = table.concat(chars, "", 1, count + 1)
+pos = pos + count
+end
+return table.concat(result)
+elseif self.Encoding == "mixed" then
+if math.random() < 0.5 then
+local encoded = ((str:gsub('.', function(x)
+local r, b = '', x:byte()
+for i = 8, 1, -1 do
+r = r .. (b % 2^i - b % 2^(i-1) > 0 and '1' or '0')
+end
+return r
+end) .. '0000'):gsub('%d%d%d?%d?%d?%d?', function(x)
+if #x < 6 then return '' end
+local c = 0
+for i = 1, 6 do
+c = c + (x:sub(i, i) == '1' and 2^(6 - i) or 0)
+end
+return self.base64chars:sub(c + 1, c + 1)
+end) .. ({ '', '==', '=' })[#str % 3 + 1])
+return prefix_0 .. encoded
+else
+local result = {}
+local len = #str
+local pos = 1
+while pos <= len do
+local rem = len - pos + 1
+local count = rem >= 4 and 4 or rem
+local b1, b2, b3, b4 = string.byte(str, pos, pos + count - 1)
+b1, b2, b3, b4 = b1 or 0, b2 or 0, b3 or 0, b4 or 0
+local value = ((b1 * 256 + b2) * 256 + b3) * 256 + b4
+local chars = {}
+for i = 5, 1, -1 do
+local code = (value % 85) + 1
+chars[i] = self.base85chars:sub(code, code)
+value = math.floor(value / 85)
+end
+result[#result + 1] = table.concat(chars, "", 1, count + 1)
+pos = pos + count
+end
+return prefix_1 .. table.concat(result)
+end
+end
+return str
+end
+
+function ConstantArray:apply(ast, pipeline)
+initPrefixes()
+self.rootScope = ast.body.scope
+self.arrId = self.rootScope:addVariable()
+
+self.base64chars = table.concat(util.shuffle{
+"A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "+", "/",
+})
+
+self.base85chars = table.concat(util.shuffle{
+"!", "#", "`$", "%", "&", "'", "(", ")", "*", "+", ",", "-", ".", "/", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+":", ";", "=", "?", "@", "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T",
+"U", "V", "W", "X", "Y", "Z", "[", "\", "]", "^", "_", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+"n", "o", "p", "q", "r", "s", "t", "u",
+})
+
+self.constants = {}
+self.lookup = {}
+
+visitast(ast, nil, function(node, data)
+if math.random() <= self.Threshold then
+node.__apply_constant_array = true
+if node.kind == AstKind.StringExpression then
+self:addConstant(node.value)
+elseif not self.StringsOnly then
+if node.isConstant and node.value ~= nil then
+self:addConstant(node.value)
+end
+end
+end
+end)
+
+if self.Shuffle then
+self.constants = util.shuffle(self.constants)
+self.lookup = {}
+for i, v in ipairs(self.constants) do
+self.lookup[v] = i
+end
+end
+
+self.wrapperOffset = math.random(-self.MaxWrapperOffset, self.MaxWrapperOffset)
+self.wrapperId = self.rootScope:addVariable()
+
+visitast(ast, nil, function(node, data)
+if node.__apply_constant_array then
+if node.kind == AstKind.StringExpression then
+return self:getConstant(node.value, data)
+elseif not self.StringsOnly and node.isConstant then
+return node.value ~= nil and self:getConstant(node.value, data)
+end
+node.__apply_constant_array = nil
+end
+end)
+
+table.insert(ast.body.statements, 1, Ast.LocalVariableDeclaration(self.rootScope, {self.arrId}, {self:createArray()}))
+end
+
+return ConstantArray
+
+-- This Script is Part of the Prometheus Obfuscator by levno-710
+
+-- Integrated additions from Load files
+
+-- This Script is Part of the Prometheus Obfuscator by levno-710
+-- JunkCode.lua (New Step - Opaque Predicates & Dead Code)
+
+local Step = require("prometheus.step")
+local Ast = require("prometheus.ast")
+local Scope = require("prometheus.scope")
+local visitast = require("prometheus.visitast")
+local RandomStrings = require("prometheus.randomStrings")
+
+local AstKind = Ast.AstKind
+
+local JunkCode = Step:extend()
+JunkCode.Description = "Inserts junk code, opaque predicates and dead branches"
+JunkCode.Name = "Junk Code"
+
+JunkCode.SettingsDescriptor = {
+Threshold = {
+name = "Threshold",
+description = "Relative amount of locations to insert junk",
+type = "number",
+default = 0.4,
+min = 0,
+max = 1,
+},
+MaxJunkPerBlock = {
+name = "MaxJunkPerBlock",
+description = "Maximum junk statements per block",
+type = "number",
+default = 3,
+min = 1,
+max = 10,
+},
+}
+
+function JunkCode:init(_) end
+
+local function makeOpaqueTrue(scope)
+-- Classic opaque: (x * x) >= 0 is always true for real numbers
+local id = scope:addVariable()
+local v = Ast.VariableExpression(scope, id)
+local assign = Ast.LocalVariableDeclaration(scope, {id}, {Ast.NumberExpression(math.random(1, 100))})
+local pred = Ast.GreaterThanOrEqualsExpression(
+Ast.MulExpression(v, v, false),
+Ast.NumberExpression(0),
+true
+)
+return assign, pred
+end
+
+local function makeOpaqueFalse(scope)
+local id = scope:addVariable()
+local v = Ast.VariableExpression(scope, id)
+local assign = Ast.LocalVariableDeclaration(scope, {id}, {Ast.NumberExpression(math.random(1, 50))})
+local pred = Ast.LessThanExpression(
+Ast.MulExpression(v, v, false),
+Ast.NumberExpression(0),
+true
+)
+return assign, pred
+end
+
+local function makeDeadCode(scope)
+local junkScope = Scope:new(scope)
+local stmts = {}
+local n = math.random(1, 3)
+for i = 1, n do
+local id = junkScope:addVariable()
+table.insert(stmts, Ast.LocalVariableDeclaration(junkScope, {id}, {
+Ast.NumberExpression(math.random(-1000, 1000))
+}))
+if math.random() > 0.5 then
+table.insert(stmts, Ast.AssignmentStatement(
+{Ast.AssignmentVariable(junkScope, id)},
+{Ast.AddExpression(
+Ast.VariableExpression(junkScope, id),
+Ast.NumberExpression(math.random(1, 10)),
+false
+)}
+))
+end
+end
+return Ast.Block(stmts, junkScope)
+end
+
+function JunkCode:apply(ast, pipeline)
+visitast(ast, nil, function(node, data)
+if node.kind == AstKind.Block and node.statements then
+if math.random() > self.Threshold then return end
+
+local newStmts = {}
+local inserted = 0
+for _, stmt in ipairs(node.statements) do
+table.insert(newStmts, stmt)
+
+if inserted < self.MaxJunkPerBlock and math.random() < 0.35 then
+local choice = math.random(1, 3)
+if choice == 1 then
+-- Opaque true branch with dead else
+local assign, pred = makeOpaqueTrue(data.scope or node.scope)
+local dead = makeDeadCode(data.scope or node.scope)
+table.insert(newStmts, assign)
+table.insert(newStmts, Ast.IfStatement(pred, Ast.Block({}, Scope:new(node.scope)), {}, dead))
+elseif choice == 2 then
+-- Opaque false (dead if)
+local assign, pred = makeOpaqueFalse(data.scope or node.scope)
+local dead = makeDeadCode(data.scope or node.scope)
+table.insert(newStmts, assign)
+table.insert(newStmts, Ast.IfStatement(pred, dead, {}, nil))
+else
+-- Pure junk locals
+local junk = makeDeadCode(data.scope or node.scope)
+for _, j in ipairs(junk.statements) do
+table.insert(newStmts, j)
+end
+end
+inserted = inserted + 1
+end
+end
+node.statements = newStmts
+end
+end)
+
+return ast
+end
+
+return JunkCode
+
+-- This Script is Part of the Prometheus Obfuscator by levno-710
+-- ControlFlowFlattening.lua (New Step - Basic CFF)
+
+local Step = require("prometheus.step")
+local Ast = require("prometheus.ast")
+local Scope = require("prometheus.scope")
+local visitast = require("prometheus.visitast")
+local util = require("prometheus.util")
+
+local AstKind = Ast.AstKind
+
+local ControlFlowFlattening = Step:extend()
+ControlFlowFlattening.Description = "Flattens control flow into a state machine using a dispatcher loop"
+ControlFlowFlattening.Name = "Control Flow Flattening"
+
+ControlFlowFlattening.SettingsDescriptor = {
+Threshold = {
+name = "Threshold",
+description = "Relative amount of blocks to flatten",
+type = "number",
+default = 0.7,
+min = 0,
+max = 1,
+},
+MaxStates = {
+name = "MaxStates",
+description = "Maximum number of states in the state machine",
+type = "number",
+default = 32,
+min = 4,
+max = 256,
+},
+}
+
+function ControlFlowFlattening:init(_) end
+
+function ControlFlowFlattening:apply(ast, pipeline)
+local function flattenBlock(block, parentScope)
+if not block or not block.statements or #block.statements < 2 then
+return block
+end
+if math.random() > self.Threshold then
+return block
+end
+
+local states = {}
+local stateMap = {}
+local maxS = math.min(self.MaxStates, #block.statements + 2)
+
+for i, stmt in ipairs(block.statements) do
+local sid = math.random(1, maxS * 3)
+while stateMap[sid] do
+sid = math.random(1, maxS * 3)
+end
+stateMap[sid] = true
+table.insert(states, {id = sid, stmt = stmt})
+end
+
+-- Create state variable
+local stateScope = Scope:new(parentScope or block.scope)
+local stateId = stateScope:addVariable()
+local stateVar = Ast.VariableExpression(stateScope, stateId)
+
+-- Build dispatcher
+local cases = {}
+for i, s in ipairs(states) do
+local nextState = (i < #states) and states[i + 1].id or -1
+local bodyStmts = {s.stmt}
+if nextState > 0 then
+table.insert(bodyStmts, Ast.AssignmentStatement(
+{Ast.AssignmentVariable(stateScope, stateId)},
+{Ast.NumberExpression(nextState)}
+))
+else
+table.insert(bodyStmts, Ast.BreakStatement(nil, stateScope))
+end
+table.insert(cases, {
+condition = Ast.EqualsExpression(stateVar, Ast.NumberExpression(s.id), true),
+body = Ast.Block(bodyStmts, Scope:new(stateScope))
+})
+end
+
+-- Initial state assignment + while true dispatcher
+local initAssign = Ast.LocalVariableDeclaration(stateScope, {stateId}, {
+Ast.NumberExpression(states[1].id)
+})
+
+local whileBody = Ast.Block({}, Scope:new(stateScope))
+-- Build if-elseif chain for dispatcher
+local ifChain = nil
+for i = #cases, 1, -1 do
+local c = cases[i]
+if ifChain then
+ifChain = Ast.IfStatement(c.condition, c.body, {}, ifChain)
+else
+ifChain = Ast.IfStatement(c.condition, c.body, {}, nil)
+end
+end
+table.insert(whileBody.statements, ifChain)
+
+local whileStmt = Ast.WhileStatement(whileBody, Ast.BooleanExpression(true), stateScope)
+
+return Ast.Block({initAssign, whileStmt}, stateScope)
+end
+
+visitast(ast, nil, function(node, data)
+if node.kind == AstKind.Block and node.statements and #node.statements > 1 then
+if node.isFunctionBlock or math.random() < self.Threshold then
+local flattened = flattenBlock(node, data.scope)
+if flattened then
+node.statements = flattened.statements
+node.scope = flattened.scope
+end
+end
+end
+end)
+
+return ast
+end
+
+return ControlFlowFlattening
+
+-- AntiTamper.lua (Syntax Fixed + Dynamic Sanity)
+
+local Step = require("prometheus.step")
+local RandomStrings = require("prometheus.randomStrings")
+local Parser = require("prometheus.parser")
+local Enums = require("prometheus.enums")
+local logger = require("logger")
+
+local AntiTamper = Step:extend()
+AntiTamper.Description = "Breaks the script when modified. Uses dynamic sanity checks and optional debug hooks."
+AntiTamper.Name = "Anti Tamper"
+
+AntiTamper.SettingsDescriptor = {
+UseDebug = {
+type = "boolean",
+default = true,
+description = "Use debug library for advanced hook and tamper detection.",
+},
+}
+
+local function generateDynamicSanityCheck()
+local sanityCheckAnswers = {}
+local sanityPasses = math.random(3, 12)
+for i = 1, sanityPasses do
+sanityCheckAnswers[i] = (math.random(1, 2^24) % 2 == 1)
+end
+local primaryCheck = RandomStrings.randomString()
+local codeParts = {}
+local function addCode(fmt, ...)
+table.insert(codeParts, string.format(fmt, ...))
+end
+
+addCode("do local valid = '%s';", primaryCheck)
+addCode("for i = 0, %d do", sanityPasses)
+for i = 0, sanityPasses do
+if i == 0 then
+addCode(" if i == 0 then")
+addCode(" if valid ~= '%s' then while true do end end", primaryCheck)
+addCode(" valid = %s;", tostring(sanityCheckAnswers[1]))
+elseif i % 2 == 0 then
+addCode(" elseif i == %d then", i)
+addCode(" valid = %s;", tostring(sanityCheckAnswers[math.min(i, sanityPasses)]))
+else
+addCode(" elseif i == %d then", i)
+addCode(" if valid == %s then else while true do end end", tostring(sanityCheckAnswers[math.min(i - 1, sanityPasses)]))
+end
+end
+addCode(" end")
+addCode(" end")
+addCode("do valid = true end")
+return table.concat(codeParts, "\n")
+end
+
+function AntiTamper:init(_) end
+
+function AntiTamper:apply(ast, pipeline)
+if pipeline.PrettyPrint then
+logger:warn(string.format('"%s" cannot be used with PrettyPrint, ignoring "%s"', self.Name, self.Name))
+return ast
+end
+
+local code = generateDynamicSanityCheck()
+
+if self.UseDebug then
+code = code .. [[
+local sethook = debug and debug.sethook or function() end
+local allowedLine = nil
+local called = 0
+sethook(function(s, line)
+if not line then return end
+called = called + 1
+if allowedLine then
+if allowedLine ~= line then sethook(error, "l", 5) end
+else
+allowedLine = line
+end
+end, "l", 5)
+(function() end)()
+(function() end)()
+sethook()
+if called < 2 then valid = false end
+
+local funcs = {pcall, string.char, debug.getinfo, string.dump}
+for i = 1, #funcs do
+if debug.getinfo(funcs[i]).what ~= "C" then valid = false end
+if debug.getupvalue(funcs[i], 1) then valid = false end
+if pcall(string.dump, funcs[i]) then valid = false end
+end
+]]
+end
+
+code = code .. [[
+if not valid then
+while true do end
+end
+]]
+
+local parsed = Parser:new({LuaVersion = Enums.LuaVersion.Lua51}):parse(code)
+local doStat = parsed.body.statements[1]
+doStat.body.scope:setParent(ast.body.scope)
+table.insert(ast.body.statements, 1, doStat)
+
+return ast
+end
+
+return AntiTamper
+
+-- AddVararg.lua
+-- This Script provides a Simple Obfuscation Step that wraps the entire Script into a function
+
+local Step = require("prometheus.step");
+local Ast = require("prometheus.ast");
+local visitast = require("prometheus.visitast");
+local AstKind = Ast.AstKind;
+
+local AddVararg = Step:extend();
+AddVararg.Description = "This Step Adds Vararg to all Functions";
+AddVararg.Name = "Add Vararg";
+
+AddVararg.SettingsDescriptor = {}
+
+function AddVararg:init(_) end
+
+function AddVararg:apply(ast)
+visitast(ast, nil, function(node)
+if node.kind == AstKind.FunctionDeclaration or node.kind == AstKind.LocalFunctionDeclaration or node.kind == AstKind.FunctionLiteralExpression then
+if #node.args < 1 or node.args[#node.args].kind ~= AstKind.VarargExpression then
+node.args[#node.args + 1] = Ast.VarargExpression();
+end
+end
+end)
+end
+
+return AddVararg;-- This Script is Part of the Prometheus Obfuscator by levno-710
+-- randomStrings.lua
+-- This Script provides a library for generating random strings
+
+local Ast = require("prometheus.ast")
+local utils = require("prometheus.util")
+local charset = utils.chararray("qwertyuiopasdfghjklzxcvbnmQWERTYUIOPASDFGHJKLZXCVBNM1234567890")
+
+local function randomString(wordsOrLen)
+if type(wordsOrLen) == "table" then
+return wordsOrLen[math.random(1, #wordsOrLen)];
+end
+
+wordsOrLen = wordsOrLen or math.random(2, 15);
+if wordsOrLen > 0 then
+return randomString(wordsOrLen - 1) .. charset[math.random(1, #charset)]
+else
+return ""
+end
+end
+
+local function randomStringNode(wordsOrLen)
+return Ast.StringExpression(randomString(wordsOrLen))
+end
+
+return {
+randomString = randomString,
+randomStringNode = randomStringNode,
+}-- This Script is Part of the Prometheus Obfuscator by levno-710
+-- tokenizer.lua
+-- Overview:
+-- This Script provides a class for lexical Analysis of lua code.
+-- This Tokenizer is Capable of tokenizing LuaU and Lua5.1
+local Enums = require("prometheus.enums");
+local util = require("prometheus.util");
+local logger = require("logger");
+local config = require("config");
+
+local LuaVersion = Enums.LuaVersion;
+local lookupify = util.lookupify;
+local unlookupify = util.unlookupify;
+local escape = util.escape;
+local chararray = util.chararray;
+local keys = util.keys;
+local Tokenizer = {};
+
+Tokenizer.EOF_CHAR = "<EOF>";
+Tokenizer.WHITESPACE_CHARS = lookupify{
+" ", "\t", "\n", "\r",
+}
+
+Tokenizer.ANNOTATION_CHARS = lookupify(chararray("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"))
+Tokenizer.ANNOTATION_START_CHARS = lookupify(chararray("!@"))
+
+Tokenizer.Conventions = Enums.Conventions;
+
+Tokenizer.TokenKind = {
+Eof = "Eof",
+Keyword = "Keyword",
+Symbol = "Symbol",
+Ident = "Identifier",
+Number = "Number",
+String = "String",
+}
+
+Tokenizer.EOF_TOKEN = {
+kind = Tokenizer.TokenKind.Eof,
+value = "<EOF>",
+startPos = -1,
+endPos = -1,
+source = "<EOF>",
+}
+
+local function token(self, startPos, kind, value)
+local line, linePos = self:getPosition(self.index);
+local annotations = self.annotations
+self.annotations = {};
+return {
+kind = kind,
+value = value,
+startPos = startPos,
+endPos = self.index,
+source = self.source:sub(startPos + 1, self.index),
+line = line,
+linePos = linePos,
+annotations = annotations,
+}
+end
+
+local function generateError(self, message)
+local line, linePos = self:getPosition(self.index);
+return "Lexing Error at Position " .. tostring(line) .. ":" .. tostring(linePos) .. ", " .. message;
+end
+
+local function generateWarning(token, message)
+return "Warning at Position " .. tostring(token.line) .. ":" .. tostring(token.linePos) .. ", " .. message;
+end
+
+function Tokenizer:getPosition(i)
+local column = self.columnMap[i]
+
+if not column then --// i is bigger than self.length, this shouldn't happen, but it did. (Theres probably some error in the tokenizer, cant find it.)
+column = self.columnMap[#self.columnMap]
+end
+
+return column.id, column.charMap[i]
+end
+
+--// Prepare columnMap for getPosition
+function Tokenizer:prepareGetPosition()
+local columnMap, column = {}, { charMap = {}, id = 1, length = 0 }
+
+for index = 1, self.length do
+local character = string.sub(self.source, index, index) -- NOTE_1: this could use table.clone to reduce amount of NEWTABLE (if that causes any performance issues)
+
+local columnLength = column.length + 1
+column.length = columnLength
+column.charMap[index] = columnLength
+
+if character == "\n" then
+column = { charMap = {}, id = column.id + 1, length = 0 } -- NOTE_1
+end
+
+columnMap[index] = column
+end
+
+self.columnMap = columnMap
+end
+
+-- Constructor for Tokenizer
+function Tokenizer:new(settings)
+local luaVersion = (settings and (settings.luaVersion or settings.LuaVersion)) or LuaVersion.LuaU;
+local conventions = Tokenizer.Conventions[luaVersion];
+
+if(conventions == nil) then
+logger:error("The Lua Version "" .. luaVersion .. "" is not recognized by the Tokenizer! Please use one of the following: "" .. table.concat(keys(Tokenizer.Conventions), "","") .. """);
+end
+
+local tokenizer = {
+index = 0, -- Index where the current char is read
+length = 0,
+source = "", -- Source to Tokenize
+luaVersion = luaVersion, -- LuaVersion to be used while Tokenizing
+conventions = conventions;
+
+NumberChars = conventions.NumberChars,
+NumberCharsLookup = lookupify(conventions.NumberChars),
+Keywords = conventions.Keywords,
+KeywordsLookup = lookupify(conventions.Keywords),
+BinaryNumberChars = conventions.BinaryNumberChars,
+BinaryNumberCharsLookup = lookupify(conventions.BinaryNumberChars);
+BinaryNums = conventions.BinaryNums,
+HexadecimalNums = conventions.HexadecimalNums,
+HexNumberChars = conventions.HexNumberChars,
+HexNumberCharsLookup = lookupify(conventions.HexNumberChars),
+DecimalExponent = conventions.DecimalExponent,
+DecimalSeperators = conventions.DecimalSeperators,
+IdentChars = conventions.IdentChars,
+IdentCharsLookup = lookupify(conventions.IdentChars),
+
+EscapeSequences = conventions.EscapeSequences,
+NumericalEscapes = conventions.NumericalEscapes,
+EscapeZIgnoreNextWhitespace = conventions.EscapeZIgnoreNextWhitespace,
+HexEscapes = conventions.HexEscapes,
+UnicodeEscapes = conventions.UnicodeEscapes,
+
+SymbolChars = conventions.SymbolChars,
+SymbolCharsLookup = lookupify(conventions.SymbolChars),
+MaxSymbolLength = conventions.MaxSymbolLength,
+Symbols = conventions.Symbols,
+SymbolsLookup = lookupify(conventions.Symbols),
+
+StringStartLookup = lookupify({""", "'"}),
+annotations = {},
+};
+
+setmetatable(tokenizer, self);
+self.__index = self;
+
+return tokenizer;
+end
+
+-- Reset State of Tokenizer to Tokenize another File
+function Tokenizer:reset()
+self.index = 0;
+self.length = 0;
+self.source = "";
+self.annotations = {};
+self.columnMap = {};
+end
+
+-- Append String to this Tokenizer
+function Tokenizer:append(code)
+self.source = self.source .. code
+self.length = self.length + code:len();
+self:prepareGetPosition();
+end
+
+-- Function to peek the n'th char in the source of the tokenizer
+local function peek(self, n)
+n = n or 0;
+local i = self.index + n + 1;
+if i > self.length then
+return Tokenizer.EOF_CHAR
+end
+return self.source:sub(i, i);
+end
+
+-- Function to get the next char in the source
+local function get(self)
+local i = self.index + 1;
+if i > self.length then
+logger:error(generateError(self, "Unexpected end of Input"));
+end
+self.index = self.index + 1;
+return self.source:sub(i, i);
+end
+
+-- The same as get except it throws an Error if the char is not contained in charOrLookup
+local function expect(self, charOrLookup)
+if(type(charOrLookup) == "string") then
+charOrLookup = {[charOrLookup] = true};
+end
+
+local char = peek(self);
+if charOrLookup[char] ~= true then
+local etb = unlookupify(charOrLookup);
+for i, v in ipairs(etb) do
+etb[i] = escape(v);
+end
+local errorMessage = "Unexpected char "" .. escape(char) .. ""! Expected one of "" .. table.concat(etb, "","") .. """;
+logger:error(generateError(self, errorMessage));
+end
+
+self.index = self.index + 1;
+return char;
+end
+
+-- Returns wether the n'th char is in the lookup
+local function is(self, charOrLookup, n)
+local char = peek(self, n);
+if(type(charOrLookup) == "string") then
+return char == charOrLookup;
+end
+return charOrLookup[char];
+end
+
+function Tokenizer:parseAnnotation()
+if is(self, Tokenizer.ANNOTATION_START_CHARS) then
+self.index = self.index + 1;
+local source, length = {}, 0;
+while(is(self, Tokenizer.ANNOTATION_CHARS)) do
+source[length + 1] = get(self)
+length = #source
+end
+if length > 0 then
+self.annotations[string.lower(table.concat(source))] = true;
+end
+return nil;
+end
+return get(self);
+end
+
+-- skip one or 0 Comments and return wether one was found
+function Tokenizer:skipComment()
+if(is(self, "-", 0) and is(self, "-", 1)) then
+self.index = self.index + 2;
+if(is(self, "[")) then
+self.index = self.index + 1;
+local eqCount = 0;
+while(is(self, "=")) do
+self.index = self.index + 1;
+eqCount = eqCount + 1;
+end
+if(is(self, "[")) then
+-- Multiline Comment
+-- Get all Chars to Closing bracket but also consider that the count of equal signs must be the same
+while true do
+if(self:parseAnnotation() == ']') then
+local eqCount2 = 0;
+while(is(self, "=")) do
+self.index = self.index + 1;
+eqCount2 = eqCount2 + 1;
+end
+if(is(self, "]")) then
+if(eqCount2 == eqCount) then
+self.index = self.index + 1;
+return true
+end
+end
+end
+end
+end
+end
+-- Single Line Comment
+-- Get all Chars to next Newline
+while(self.index < self.length and self:parseAnnotation() ~= "\n") do end
+return true;
+end
+return false;
+end
+
+-- skip All Whitespace and Comments to next Token
+function Tokenizer:skipWhitespaceAndComments()
+while self:skipComment() do end
+while is(self, Tokenizer.WHITESPACE_CHARS) do
+self.index = self.index + 1;
+while self:skipComment() do end
+end
+end
+
+local function int(self, chars, seperators)
+local buffer = {};
+while true do
+if (is(self, chars)) then
+buffer[#buffer + 1] = get(self)
+elseif (is(self, seperators)) then
+self.index = self.index + 1;
+else
+break
+end
+end
+return table.concat(buffer);
+end
+
+-- Lex the next token as a Number
+function Tokenizer:number()
+local startPos = self.index;
+local source = expect(self, setmetatable({["."] = true}, {__index = self.NumberCharsLookup}));
+
+if source == "0" then
+if self.BinaryNums and is(self, lookupify(self.BinaryNums)) then
+self.index = self.index + 1;
+source = int(self, self.BinaryNumberCharsLookup, lookupify(self.DecimalSeperators or {}));
+local value = tonumber(source, 2);
+return token(self, startPos, Tokenizer.TokenKind.Number, value);
+end
+
+if self.HexadecimalNums and is(self, lookupify(self.HexadecimalNums)) then
+self.index = self.index + 1;
+source = int(self, self.HexNumberCharsLookup, lookupify(self.DecimalSeperators or {}));
+local value = tonumber(source, 16);
+return token(self, startPos, Tokenizer.TokenKind.Number, value);
+end
+end
+
+if source == "." then
+source = source .. int(self, self.NumberCharsLookup, lookupify(self.DecimalSeperators or {}));
+else
+source = source .. int(self, self.NumberCharsLookup, lookupify(self.DecimalSeperators or {}));
+if(is(self, ".")) then
+source = source .. get(self) .. int(self, self.NumberCharsLookup, lookupify(self.DecimalSeperators or {}));
+end
+end
+
+if(self.DecimalExponent and is(self, lookupify(self.DecimalExponent))) then
+source = source .. get(self);
+if(is(self, lookupify({"+","-"}))) then
+source = source .. get(self);
+end
+local v = int(self, self.NumberCharsLookup, lookupify(self.DecimalSeperators or {}));
+if(v:len() < 1) then
+logger:error(generateError(self, "Expected a Valid Exponent!"));
+end
+source = source .. v;
+end
+
+local value = tonumber(source);
+return token(self, startPos, Tokenizer.TokenKind.Number, value);
+end
+
+-- Lex the Next Token as Identifier or Keyword
+function Tokenizer:ident()
+local startPos = self.index;
+local source = expect(self, self.IdentCharsLookup)
+local sourceAddContent = {source}
+while(is(self, self.IdentCharsLookup)) do
+-- source = source .. get(self);
+table.insert(sourceAddContent, get(self))
+end
+source = table.concat(sourceAddContent)
+if(self.KeywordsLookup[source]) then
+return token(self, startPos, Tokenizer.TokenKind.Keyword, source);
+end
+
+local tk = token(self, startPos, Tokenizer.TokenKind.Ident, source);
+
+if(string.sub(source, 1, string.len(config.IdentPrefix)) == config.IdentPrefix) then
+logger:warn(generateWarning(tk, string.format("identifiers should not start with "%s" as this may break the program", config.IdentPrefix)));
+end
+
+return tk;
+end
+
+function Tokenizer:singleLineString()
+local startPos = self.index;
+local startChar = expect(self, self.StringStartLookup);
+local buffer = {};
+
+while (not is(self, startChar)) do
+local char = get(self);
+
+-- Single Line String may not contain Linebreaks except when they are escaped by 
+ if(char == '\n') then
+self.index = self.index - 1;
+logger:error(generateError(self, "Unterminated String"));
+end
+
+if(char == "\") then
+char = get(self);
+
+local escape = self.EscapeSequences[char];
+if(type(escape) == "string") then
+char = escape;
+
+elseif(self.NumericalEscapes and self.NumberCharsLookup[char]) then
+local numstr = char;
+
+if(is(self, self.NumberCharsLookup)) then
+char = get(self);
+numstr = numstr .. char;
+end
+
+if(is(self, self.NumberCharsLookup)) then
+char = get(self);
+numstr = numstr .. char;
+end
+
+char = string.char(tonumber(numstr));
+
+elseif(self.UnicodeEscapes and char == "u") then
+expect(self, "{");
+local num = "";
+while (is(self, self.HexNumberCharsLookup)) do
+num = num .. get(self);
+end
+expect(self, "}");
+char = util.utf8char(tonumber(num, 16));
+elseif(self.HexEscapes and char == "x") then
+local hex = expect(self, self.HexNumberCharsLookup) .. expect(self, self.HexNumberCharsLookup);
+char = string.char(tonumber(hex, 16));
+elseif(self.EscapeZIgnoreNextWhitespace and char == "z") then
+char = "";
+while(is(self, Tokenizer.WHITESPACE_CHARS)) do
+self.index = self.index + 1;
+end
+end
+end
+
+--// since table.insert is slower in lua51
+buffer[#buffer + 1] = char
+end
+
+expect(self, startChar);
+
+return token(self, startPos, Tokenizer.TokenKind.String, table.concat(buffer))
+end
+
+function Tokenizer:multiLineString()
+local startPos = self.index;
+if(is(self, "[")) then
+self.index = self.index + 1;
+local eqCount = 0;
+while(is(self, "=")) do
+self.index = self.index + 1;
+eqCount = eqCount + 1;
+end
+if(is(self, "[")) then
+-- Multiline String
+-- Parse String to Closing bracket but also consider that the count of equal signs must be the same
+
+-- Skip Leading newline if existing
+self.index = self.index + 1;
+if(is(self, "\n")) then
+self.index = self.index + 1;
+end
+
+local value = "";
+while true do
+local char = get(self);
+if(char == ']') then
+local eqCount2 = 0;
+while(is(self, "=")) do
+char = char .. get(self);
+eqCount2 = eqCount2 + 1;
+end
+if(is(self, "]")) then
+if(eqCount2 == eqCount) then
+self.index = self.index + 1;
+return token(self, startPos, Tokenizer.TokenKind.String, value), true
+end
+end
+end
+value = value .. char;
+end
+end
+end
+self.index = startPos;
+return nil, false -- There was not an actual multiline string at the given Position
+end
+
+function Tokenizer:symbol()
+local startPos = self.index;
+for len = self.MaxSymbolLength, 1, -1 do
+local str = self.source:sub(self.index + 1, self.index + len);
+if self.SymbolsLookup[str] then
+self.index = self.index + len;
+return token(self, startPos, Tokenizer.TokenKind.Symbol, str);
+end
+end
+logger:error(generateError(self, "Unknown Symbol"));
+end
+
+-- get the Next token
+function Tokenizer:next()
+-- Skip All Whitespace before the token
+self:skipWhitespaceAndComments();
+
+local startPos = self.index;
+if startPos >= self.length then
+return token(self, startPos, Tokenizer.TokenKind.Eof);
+end
+
+-- Numbers
+if(is(self, self.NumberCharsLookup)) then
+return self:number();
+end
+
+-- Identifiers and Keywords
+if(is(self, self.IdentCharsLookup)) then
+return self:ident();
+end
+
+-- Singleline String Literals
+if(is(self, self.StringStartLookup)) then
+return self:singleLineString();
+end
+
+-- Multiline String Literals
+if(is(self, "[", 0)) then
+-- The isString variable is due to the fact that "[" could also be a symbol for indexing
+local value, isString = self:multiLineString();
+if isString then
+return value;
+end
+end
+
+-- Number starting with dot
+if(is(self, ".") and is(self, self.NumberCharsLookup, 1)) then
+return self:number();
+end
+
+-- Symbols
+if(is(self, self.SymbolCharsLookup)) then
+return self:symbol();
+end
+
+logger:error(generateError(self, "Unexpected char "" .. escape(peek(self)) .. ""!"));
+end
+
+function Tokenizer:scanAll()
+local tb = {};
+repeat
+local token = self:next();
+table.insert(tb, token);
+until token.kind == Tokenizer.TokenKind.Eof
+return tb
+end
+
+return Tokenizer-- This Script is Part of the Prometheus Obfuscator by levno-710
+-- parser.lua
+-- Overview:
+-- This Script provides a class for parsing of lua code.
+-- This Parser is Capable of parsing LuaU and Lua5.1
+-- Note that when parsing LuaU "continue" is treated as a Keyword, so no variable may be named "continue" even though this would be valid in LuaU
+-- Settings Object:
+-- luaVersion : The LuaVersion of the Script - Currently Supported : Lua51 and LuaU
+
+local Tokenizer = require("prometheus.tokenizer");
+local Enums = require("prometheus.enums");
+local util = require("prometheus.util");
+local Ast = require("prometheus.ast");
+local Scope = require("prometheus.scope");
+local logger = require("logger");
+
+local AstKind = Ast.AstKind;
+
+local LuaVersion = Enums.LuaVersion;
+local lookupify = util.lookupify;
+
+local TokenKind = Tokenizer.TokenKind;
+
+local Parser = {};
+
+local ASSIGNMENT_NO_WARN_LOOKUP = lookupify{
+AstKind.NilExpression,
+AstKind.FunctionCallExpression,
+AstKind.PassSelfFunctionCallExpression,
+AstKind.VarargExpression
+};
+
+local CALLABLE_PREFIX_EXPRESSION_LOOKUP = lookupify{
+AstKind.VariableExpression,
+AstKind.IndexExpression,
+AstKind.FunctionCallExpression,
+AstKind.PassSelfFunctionCallExpression
+};
+
+local function generateError(self, message)
+local token;
+if(self.index > self.length) then
+token = self.tokens[self.length];
+elseif(self.index < 1) then
+return "Parsing Error at Position 0:0, " .. message;
+else
+token = self.tokens[self.index];
+end
+
+return "Parsing Error at Position " .. tostring(token.line) .. ":" .. tostring(token.linePos) .. ", " .. message;
+end
+
+local function generateWarning(token, message)
+return "Warning at Position " .. tostring(token.line) .. ":" .. tostring(token.linePos) .. ", " .. message;
+end
+
+function Parser:new(settings)
+local luaVersion = (settings and (settings.luaVersion or settings.LuaVersion)) or LuaVersion.LuaU;
+local parser = {
+luaVersion = luaVersion,
+tokenizer = Tokenizer:new({
+luaVersion = luaVersion
+}),
+tokens = {};
+length = 0;
+index = 0;
+};
+
+setmetatable(parser, self);
+self.__index = self;
+
+return parser;
+end
+
+-- Function to peek the n'th token
+local function peek(self, n)
+n = n or 0;
+local i = self.index + n + 1;
+if i > self.length then
+return Tokenizer.EOF_TOKEN;
+end
+return self.tokens[i];
+end
+
+-- Function to get the next Token
+local function get(self)
+local i = self.index + 1;
+if i > self.length then
+error(generateError(self, "Unexpected end of Input"));
+end
+self.index = self.index + 1;
+local tk = self.tokens[i];
+
+return tk;
+end
+
+local function is(self, kind, sourceOrN, n)
+local token = peek(self, n);
+
+local source = nil;
+if(type(sourceOrN) == "string") then
+source = sourceOrN;
+else
+n = sourceOrN;
+end
+n = n or 0;
+
+if(token.kind == kind) then
+if(source == nil or token.source == source) then
+return true;
+end
+end
+
+return false;
+end
+
+local function consume(self, kind, source)
+if(is(self, kind, source)) then
+self.index = self.index + 1;
+return true;
+end
+return false;
+end
+
+local function expect(self, kind, source)
+if(is(self, kind, source, 0)) then
+return get(self);
+end
+
+local token = peek(self);
+if self.disableLog then error() end
+if(source) then
+logger:error(generateError(self, string.format("unexpected token <%s> "%s", expected <%s> "%s"", token.kind, token.source, kind, source)));
+else
+logger:error(generateError(self, string.format("unexpected token <%s> "%s", expected <%s>", token.kind, token.source, kind)));
+end
+end
+
+-- Parse the given code to an Abstract Syntax Tree
+function Parser:parse(code)
+self.tokenizer:append(code);
+self.tokens = self.tokenizer:scanAll();
+self.length = #self.tokens;
+
+-- Create Global Variable Scope
+local globalScope = Scope:newGlobal();
+
+local ast = Ast.TopNode(self:block(globalScope, false), globalScope);
+-- File Must be Over when Top Node is Fully Parsed
+expect(self, TokenKind.Eof);
+
+logger:debug("Cleaning up Parser for next Use ...")
+-- Clean Up
+self.tokenizer:reset();
+self.tokens = {};
+self.index = 0;
+self.length = 0;
+
+logger:debug("Cleanup Done")
+
+return ast;
+end
+
+-- Parse a Code Block
+function Parser:block(parentScope, currentLoop, scope)
+scope = scope or Scope:new(parentScope);
+local statements = {};
+
+repeat
+local statement, isTerminatingStatement = self:statement(scope, currentLoop);
+table.insert(statements, statement);
+until isTerminatingStatement or not statement
+
+-- Consume Eventual Semicolon after terminating return, break or continue
+consume(self, TokenKind.Symbol, ";");
+
+return Ast.Block(statements, scope);
+end
+
+function Parser:statement(scope, currentLoop)
+-- Skip all semicolons before next real statement
+-- NOP statements are therefore ignored
+while(consume(self, TokenKind.Symbol, ";")) do
+
+end
+
+-- Break Statement - only valid inside of Loops
+if(consume(self, TokenKind.Keyword, "break")) then
+if(not currentLoop) then
+if self.disableLog then error() end;
+logger:error(generateError(self, "the break Statement is only valid inside of loops"));
+end
+-- Return true as Second value because break must be the last Statement in a block
+return Ast.BreakStatement(currentLoop, scope), true;
+end
+
+-- Continue Statement - only valid inside of Loops - only valid in LuaU
+if(self.luaVersion == LuaVersion.LuaU and consume(self, TokenKind.Keyword, "continue")) then
+if(not currentLoop) then
+if self.disableLog then error() end;
+logger:error(generateError(self, "the continue Statement is only valid inside of loops"));
+end
+-- Return true as Second value because continue must be the last Statement in a block
+return Ast.ContinueStatement(currentLoop, scope), true;
+end
+
+-- do ... end Statement
+if(consume(self, TokenKind.Keyword, "do")) then
+local body = self:block(scope, currentLoop);
+expect(self, TokenKind.Keyword, "end");
+return Ast.DoStatement(body);
+end
+
+-- While Statement
+if(consume(self, TokenKind.Keyword, "while")) then
+local condition = self:expression(scope);
+expect(self, TokenKind.Keyword, "do");
+local stat = Ast.WhileStatement(nil, condition, scope);
+stat.body = self:block(scope, stat);
+expect(self, TokenKind.Keyword, "end");
+return stat;
+end
+
+-- Repeat Statement
+if(consume(self, TokenKind.Keyword, "repeat")) then
+local repeatScope = Scope:new(scope);
+local stat = Ast.RepeatStatement(nil, nil, scope);
+stat.body = self:block(nil, stat, repeatScope);
+expect(self, TokenKind.Keyword, "until");
+stat.condition = self:expression(repeatScope);
+return stat;
+end
+
+-- Return Statement
+if(consume(self, TokenKind.Keyword, "return")) then
+local args = {};
+if(not is(self, TokenKind.Keyword, "end") and not is(self, TokenKind.Keyword, "elseif") and not is(self, TokenKind.Keyword, "else") and not is(self, TokenKind.Symbol, ";") and not is(self, TokenKind.Eof)) then
+args = self:exprList(scope);
+end
+-- Return true as Second value because return must be the last Statement in a block
+return Ast.ReturnStatement(args), true;
+end
+
+-- If Statement
+if(consume(self, TokenKind.Keyword, "if")) then
+local condition = self:expression(scope);
+expect(self, TokenKind.Keyword, "then");
+local body = self:block(scope, currentLoop);
+
+local elseifs = {};
+-- Elseifs
+while(consume(self, TokenKind.Keyword, "elseif")) do
+local condition = self:expression(scope);
+expect(self, TokenKind.Keyword, "then");
+local body = self:block(scope, currentLoop);
+
+table.insert(elseifs, {
+condition = condition,
+body = body,
+});
+end
+
+local elsebody = nil;
+-- Else
+if(consume(self, TokenKind.Keyword, "else")) then
+elsebody = self:block(scope, currentLoop);
+end
+
+expect(self, TokenKind.Keyword, "end");
+
+return Ast.IfStatement(condition, body, elseifs, elsebody);
+end
+
+-- Function Declaration
+if(consume(self, TokenKind.Keyword, "function")) then
+-- TODO: Parse Function Declaration Name
+local obj = self:funcName(scope);
+local baseScope = obj.scope;
+local baseId = obj.id;
+local indices = obj.indices;
+
+local funcScope = Scope:new(scope);
+
+expect(self, TokenKind.Symbol, "(");
+local args = self:functionArgList(funcScope);
+expect(self, TokenKind.Symbol, ")");
+
+if(obj.passSelf) then
+local id = funcScope:addVariable("self", obj.token);
+table.insert(args, 1, Ast.VariableExpression(funcScope, id));
+end
+
+local body = self:block(nil, false, funcScope);
+expect(self, TokenKind.Keyword, "end");
+
+return Ast.FunctionDeclaration(baseScope, baseId, indices, args, body);
+end
+
+-- Local Function or Variable Declaration
+if(consume(self, TokenKind.Keyword, "local")) then
+-- Local Function Declaration
+if(consume(self, TokenKind.Keyword, "function")) then
+local ident = expect(self, TokenKind.Ident);
+local name = ident.value;
+
+local id = scope:addVariable(name, ident);
+local funcScope = Scope:new(scope);
+
+expect(self, TokenKind.Symbol, "(");
+local args = self:functionArgList(funcScope);
+expect(self, TokenKind.Symbol, ")");
+
+local body = self:block(nil, false, funcScope);
+expect(self, TokenKind.Keyword, "end");
+
+return Ast.LocalFunctionDeclaration(scope, id, args, body);
+end
+
+-- Local Variable Declaration
+local ids = self:nameList(scope);
+local expressions = {};
+if(consume(self, TokenKind.Symbol, "=")) then
+expressions = self:exprList(scope);
+end
+
+-- Variables can only be reffered to in the next statement, so the id's are enabled after the expressions have been parsed
+self:enableNameList(scope, ids);
+
+if(#expressions > #ids) then
+logger:warn(generateWarning(peek(self, -1), string.format("assigning %d values to %d variable" .. ((#ids > 1 and "s") or ""), #expressions, #ids)));
+elseif(#ids > #expressions and #expressions > 0 and not ASSIGNMENT_NO_WARN_LOOKUP[expressions[#expressions].kind]) then
+logger:warn(generateWarning(peek(self, -1), string.format("assigning %d value" .. ((#expressions > 1 and "s") or "") ..
+" to %d variables initializes extra variables with nil, add a nil value to silence", #expressions, #ids)));
+end
+return Ast.LocalVariableDeclaration(scope, ids, expressions);
+end
+
+-- For Statement
+if(consume(self, TokenKind.Keyword, "for")) then
+-- Normal for Statement
+if(is(self, TokenKind.Symbol, "=", 1)) then
+local forScope = Scope:new(scope);
+
+local ident = expect(self, TokenKind.Ident);
+local varId = forScope:addDisabledVariable(ident.value, ident);
+
+expect(self, TokenKind.Symbol, "=");
+local initialValue = self:expression(scope);
+
+expect(self, TokenKind.Symbol, ",");
+local finalValue = self:expression(scope);
+local incrementBy = Ast.NumberExpression(1);
+if(consume(self, TokenKind.Symbol, ",")) then
+incrementBy = self:expression(scope);
+end
+
+local stat = Ast.ForStatement(forScope, varId, initialValue, finalValue, incrementBy, nil, scope);
+forScope:enableVariable(varId);
+expect(self, TokenKind.Keyword, "do");
+stat.body = self:block(nil, stat, forScope);
+expect(self, TokenKind.Keyword, "end");
+return stat;
+end
+
+-- For ... in ... statement
+local forScope = Scope:new(scope);
+
+local ids = self:nameList(forScope);
+expect(self, TokenKind.Keyword, "in");
+local expressions = self:exprList(scope);
+-- Enable Ids after Expression Parsing so that code like this works:
+-- local z = {10,20}
+-- for y,z in ipairs(z) do
+-- print(y, z);
+-- end
+self:enableNameList(forScope, ids);
+expect(self, TokenKind.Keyword, "do");
+local stat = Ast.ForInStatement(forScope, ids, expressions, nil, scope);
+stat.body = self:block(nil, stat, forScope);
+expect(self, TokenKind.Keyword, "end");
+
+return stat;
+end
+
+local expr = self:primaryExpression(scope);
+-- Variable Assignment or Function Call
+if expr then
+-- Function Call Statement
+if(expr.kind == AstKind.FunctionCallExpression) then
+return Ast.FunctionCallStatement(expr.base, expr.args);
+end
+
+-- Function Call Statement passing self
+if(expr.kind == AstKind.PassSelfFunctionCallExpression) then
+return Ast.PassSelfFunctionCallStatement(expr.base, expr.passSelfFunctionName, expr.args);
+end
+
+-- Variable Assignment
+if(expr.kind == AstKind.IndexExpression or expr.kind == AstKind.VariableExpression) then
+if(expr.kind == AstKind.IndexExpression) then
+expr.kind = AstKind.AssignmentIndexing
+end
+if(expr.kind == AstKind.VariableExpression) then
+expr.kind = AstKind.AssignmentVariable
+end
+
+if(self.luaVersion == LuaVersion.LuaU) then
+-- LuaU Compound Assignment
+if(consume(self, TokenKind.Symbol, "+=")) then
+local rhs = self:expression(scope);
+return Ast.CompoundAddStatement(expr, rhs);
+end
+
+if(consume(self, TokenKind.Symbol, "-=")) then
+local rhs = self:expression(scope);
+return Ast.CompoundSubStatement(expr, rhs);
+end
+
+if(consume(self, TokenKind.Symbol, "*=")) then
+local rhs = self:expression(scope);
+return Ast.CompoundMulStatement(expr, rhs);
+end
+
+if(consume(self, TokenKind.Symbol, "/=")) then
+local rhs = self:expression(scope);
+return Ast.CompoundDivStatement(expr, rhs);
+end
+
+if(consume(self, TokenKind.Symbol, "%=")) then
+local rhs = self:expression(scope);
+return Ast.CompoundModStatement(expr, rhs);
+end
+
+if(consume(self, TokenKind.Symbol, "^=")) then
+local rhs = self:expression(scope);
+return Ast.CompoundPowStatement(expr, rhs);
+end
+
+if(consume(self, TokenKind.Symbol, "..=")) then
+local rhs = self:expression(scope);
+return Ast.CompoundConcatStatement(expr, rhs);
+end
+end
+
+local lhs = {
+expr
+}
+
+while consume(self, TokenKind.Symbol, ",") do
+expr = self:primaryExpression(scope);
+
+if(not expr) then
+if self.disableLog then error() end;
+logger:error(generateError(self, string.format("expected a valid assignment statement lhs part but got nil")));
+end
+
+if(expr.kind == AstKind.IndexExpression or expr.kind == AstKind.VariableExpression) then
+if(expr.kind == AstKind.IndexExpression) then
+expr.kind = AstKind.AssignmentIndexing
+end
+if(expr.kind == AstKind.VariableExpression) then
+expr.kind = AstKind.AssignmentVariable
+end
+table.insert(lhs, expr);
+else
+if self.disableLog then error() end;
+logger:error(generateError(self, string.format("expected a valid assignment statement lhs part but got <%s>", expr.kind)));
+end
+end
+
+expect(self, TokenKind.Symbol, "=");
+
+local rhs = self:exprList(scope);
+
+return Ast.AssignmentStatement(lhs, rhs);
+end
+
+if self.disableLog then error() end;
+logger:error(generateError(self, "expressions are not valid statements!"));
+end
+
+return nil;
+end
+
+function Parser:primaryExpression(scope)
+local i = self.index;
+local s = self;
+self.disableLog = true;
+local status, val = pcall(self.expressionFunctionCall, self, scope);
+self.disableLog = false;
+if(status) then
+return val;
+else
+self.index = i;
+return nil;
+end
+end
+
+-- List of expressions Seperated by a comma
+function Parser:exprList(scope)
+local expressions = {
+self:expression(scope)
+};
+while(consume(self, TokenKind.Symbol, ",")) do
+table.insert(expressions, self:expression(scope));
+end
+return expressions;
+end
+
+-- list of local variable names
+function Parser:nameList(scope)
+local ids = {};
+
+local ident = expect(self, TokenKind.Ident);
+local id = scope:addDisabledVariable(ident.value, ident);
+table.insert(ids, id);
+
+while(consume(self, TokenKind.Symbol, ",")) do
+ident = expect(self, TokenKind.Ident);
+id = scope:addDisabledVariable(ident.value, ident);
+table.insert(ids, id);
+end
+
+return ids;
+end
+
+function Parser:enableNameList(scope, list)
+for i, id in ipairs(list) do
+scope:enableVariable(id);
+end
+end
+
+-- function name
+function Parser:funcName(scope)
+local ident = expect(self, TokenKind.Ident);
+local baseName = ident.value;
+
+local baseScope, baseId = scope:resolve(baseName);
+
+local indices = {};
+local passSelf = false;
+while(consume(self, TokenKind.Symbol, ".")) do
+table.insert(indices, expect(self, TokenKind.Ident).value);
+end
+
+if(consume(self, TokenKind.Symbol, ":")) then
+table.insert(indices, expect(self, TokenKind.Ident).value);
+passSelf = true;
+end
+
+return {
+scope = baseScope,
+id = baseId,
+indices = indices,
+passSelf = passSelf,
+token = ident,
+};
+end
+
+-- Expression
+function Parser:expression(scope)
+return self:expressionOr(scope);
+end
+
+function Parser:expressionOr(scope)
+local lhs = self:expressionAnd(scope);
+
+if(consume(self, TokenKind.Keyword, "or")) then
+local rhs = self:expressionOr(scope);
+return Ast.OrExpression(lhs, rhs, true);
+end
+
+return lhs;
+end
+
+function Parser:expressionAnd(scope)
+local lhs = self:expressionComparision(scope);
+
+if(consume(self, TokenKind.Keyword, "and")) then
+local rhs = self:expressionAnd(scope);
+return Ast.AndExpression(lhs, rhs, true);
+end
+
+return lhs;
+end
+
+function Parser:expressionComparision(scope)
+local curr = self:expressionStrCat(scope);
+repeat
+local found = false;
+if(consume(self, TokenKind.Symbol, "<")) then
+local rhs = self:expressionStrCat(scope);
+curr = Ast.LessThanExpression(curr, rhs, true);
+found = true;
+end
+
+if(consume(self, TokenKind.Symbol, ">")) then
+local rhs = self:expressionStrCat(scope);
+curr = Ast.GreaterThanExpression(curr, rhs, true);
+found = true;
+end
+
+if(consume(self, TokenKind.Symbol, "<=")) then
+local rhs = self:expressionStrCat(scope);
+curr = Ast.LessThanOrEqualsExpression(curr, rhs, true);
+found = true;
+end
+
+if(consume(self, TokenKind.Symbol, ">=")) then
+local rhs = self:expressionStrCat(scope);
+curr = Ast.GreaterThanOrEqualsExpression(curr, rhs, true);
+found = true;
+end
+
+if(consume(self, TokenKind.Symbol, "~=")) then
+local rhs = self:expressionStrCat(scope);
+curr = Ast.NotEqualsExpression(curr, rhs, true);
+found = true;
+end
+
+if(consume(self, TokenKind.Symbol, "==")) then
+local rhs = self:expressionStrCat(scope);
+curr = Ast.EqualsExpression(curr, rhs, true);
+found = true;
+end
+until not found;
+
+return curr;
+end
+
+function Parser:expressionStrCat(scope)
+local lhs = self:expressionAddSub(scope);
+
+if(consume(self, TokenKind.Symbol, "..")) then
+local rhs = self:expressionStrCat(scope);
+return Ast.StrCatExpression(lhs, rhs, true);
+end
+
+return lhs;
+end
+
+function Parser:expressionAddSub(scope)
+local curr = self:expressionMulDivMod(scope);
+
+repeat
+local found = false;
+if(consume(self, TokenKind.Symbol, "+")) then
+local rhs = self:expressionMulDivMod(scope);
+curr = Ast.AddExpression(curr, rhs, true);
+found = true;
+end
+
+if(consume(self, TokenKind.Symbol, "-")) then
+local rhs = self:expressionMulDivMod(scope);
+curr = Ast.SubExpression(curr, rhs, true);
+found = true;
+end
+until not found;
+
+return curr;
+end
+
+function Parser:expressionMulDivMod(scope)
+local curr = self:expressionUnary(scope);
+
+repeat
+local found = false;
+if(consume(self, TokenKind.Symbol, "*")) then
+local rhs = self:expressionUnary(scope);
+curr = Ast.MulExpression(curr, rhs, true);
+found = true;
+end
+
+if(consume(self, TokenKind.Symbol, "/")) then
+local rhs = self:expressionUnary(scope);
+curr = Ast.DivExpression(curr, rhs, true);
+found = true;
+end
+
+if(consume(self, TokenKind.Symbol, "%")) then
+local rhs = self:expressionUnary(scope);
+curr = Ast.ModExpression(curr, rhs, true);
+found = true;
+end
+until not found;
+
+return curr;
+end
+
+function Parser:expressionUnary(scope)
+if(consume(self, TokenKind.Keyword, "not")) then
+local rhs = self:expressionUnary(scope);
+return Ast.NotExpression(rhs, true);
+end
+
+if(consume(self, TokenKind.Symbol, "#")) then
+local rhs = self:expressionUnary(scope);
+return Ast.LenExpression(rhs, true);
+end
+
+if(consume(self, TokenKind.Symbol, "-")) then
+local rhs = self:expressionUnary(scope);
+return Ast.NegateExpression(rhs, true);
+end
+
+return self:expressionPow(scope);
+end
+
+function Parser:expressionPow(scope)
+local lhs = self:tableOrFunctionLiteral(scope);
+
+if(consume(self, TokenKind.Symbol, "^")) then
+-- Allow unary operators on the rhs (e.g. 2 ^ #x, 2 ^ -x) while preserving right-associativity. ~ SpinnySpiwal
+local rhs = self:expressionUnary(scope);
+return Ast.PowExpression(lhs, rhs, true);
+end
+
+return lhs;
+end
+
+-- Table Literals and Function Literals cannot directly be called or indexed
+function Parser:tableOrFunctionLiteral(scope)
+
+if(is(self, TokenKind.Symbol, "{")) then
+return self:tableConstructor(scope);
+end
+
+if(is(self, TokenKind.Keyword, "function")) then
+return self:expressionFunctionLiteral(scope);
+end
+
+return self:expressionFunctionCall(scope);
+end
+
+function Parser:expressionFunctionLiteral(parentScope)
+local scope = Scope:new(parentScope);
+
+expect(self, TokenKind.Keyword, "function");
+
+expect(self, TokenKind.Symbol, "(");
+local args = self:functionArgList(scope);
+expect(self, TokenKind.Symbol, ")");
+
+local body = self:block(nil, false, scope);
+expect(self, TokenKind.Keyword, "end");
+
+return Ast.FunctionLiteralExpression(args, body);
+end
+
+function Parser:functionArgList(scope)
+local args = {};
+if(consume(self, TokenKind.Symbol, "...")) then
+table.insert(args, Ast.VarargExpression());
+return args;
+end
+
+if(is(self, TokenKind.Ident)) then
+local ident = get(self);
+local name = ident.value;
+
+local id = scope:addVariable(name, ident);
+table.insert(args, Ast.VariableExpression(scope, id));
+
+while(consume(self, TokenKind.Symbol, ",")) do
+if(consume(self, TokenKind.Symbol, "...")) then
+table.insert(args, Ast.VarargExpression());
+return args;
+end
+
+ident = get(self);
+name = ident.value;
+
+id = scope:addVariable(name, ident);
+table.insert(args, Ast.VariableExpression(scope, id));
+end
+end
+
+return args;
+end
+
+function Parser:expressionFunctionCall(scope, base)
+base = base or self:expressionIndex(scope);
+
+if(not (base and (CALLABLE_PREFIX_EXPRESSION_LOOKUP[base.kind] or base.isParenthesizedExpression))) then
+return base;
+end
+
+-- Normal Function Call
+local args = {};
+if(is(self, TokenKind.String)) then
+args = {
+Ast.StringExpression(get(self).value),
+};
+elseif(is(self, TokenKind.Symbol, "{")) then
+args = {
+self:tableConstructor(scope),
+};
+elseif(consume(self, TokenKind.Symbol, "(")) then
+if(not is(self, TokenKind.Symbol, ")")) then
+args = self:exprList(scope);
+end
+expect(self, TokenKind.Symbol, ")");
+else
+return base;
+end
+
+local node = Ast.FunctionCallExpression(base, args);
+
+-- the result of a function call can be indexed
+if(is(self, TokenKind.Symbol, ".") or is(self, TokenKind.Symbol, "[") or is(self, TokenKind.Symbol, ":")) then
+return self:expressionIndex(scope, node);
+end
+
+-- The result of a function call can be a function that is again called
+if(is(self, TokenKind.Symbol, "(") or is(self, TokenKind.Symbol, "{") or is(self, TokenKind.String)) then
+return self:expressionFunctionCall(scope, node);
+end
+
+return node;
+end
+
+function Parser:expressionIndex(scope, base)
+base = base or self:expressionLiteral(scope);
+
+-- Parse Indexing Expressions
+while(consume(self, TokenKind.Symbol, "[")) do
+local expr = self:expression(scope);
+expect(self, TokenKind.Symbol, "]");
+base = Ast.IndexExpression(base, expr);
+end
+
+-- Parse Indexing Expressions
+while consume(self, TokenKind.Symbol, ".") do
+local ident = expect(self, TokenKind.Ident);
+base = Ast.IndexExpression(base, Ast.StringExpression(ident.value));
+
+while(consume(self, TokenKind.Symbol, "[")) do
+local expr = self:expression(scope);
+expect(self, TokenKind.Symbol, "]");
+base = Ast.IndexExpression(base, expr);
+end
+end
+
+-- Function Passing self
+if(consume(self, TokenKind.Symbol, ":")) then
+local passSelfFunctionName = expect(self, TokenKind.Ident).value;
+local args = {};
+if(is(self, TokenKind.String)) then
+args = {
+Ast.StringExpression(get(self).value),
+};
+elseif(is(self, TokenKind.Symbol, "{")) then
+args = {
+self:tableConstructor(scope),
+};
+else
+expect(self, TokenKind.Symbol, "(");
+if(not is(self, TokenKind.Symbol, ")")) then
+args = self:exprList(scope);
+end
+expect(self, TokenKind.Symbol, ")");
+end
+
+local node = Ast.PassSelfFunctionCallExpression(base, passSelfFunctionName, args);
+
+-- the result of a function call can be indexed
+if(is(self, TokenKind.Symbol, ".") or is(self, TokenKind.Symbol, "[") or is(self, TokenKind.Symbol, ":")) then
+return self:expressionIndex(scope, node);
+end
+
+-- The result of a function call can be a function that is again called
+if(is(self, TokenKind.Symbol, "(") or is(self, TokenKind.Symbol, "{") or is(self, TokenKind.String)) then
+return self:expressionFunctionCall(scope, node);
+end
+
+return node
+end
+
+-- The result of a function call can be a function that is again called
+if(is(self, TokenKind.Symbol, "(") or is(self, TokenKind.Symbol, "{") or is(self, TokenKind.String)) then
+return self:expressionFunctionCall(scope, base);
+end
+
+return base;
+end
+
+function Parser:expressionLiteral(scope)
+-- () expression
+if(consume(self, TokenKind.Symbol, "(")) then
+local expr = self:expression(scope);
+expect(self, TokenKind.Symbol, ")");
+if expr then
+expr.isParenthesizedExpression = true;
+end
+return expr;
+end
+
+-- String Literal
+if(is(self, TokenKind.String)) then
+return Ast.StringExpression(get(self).value);
+end
+
+-- Number Literal
+if(is(self, TokenKind.Number)) then
+return Ast.NumberExpression(get(self).value);
+end
+
+-- True Literal
+if(consume(self, TokenKind.Keyword, "true")) then
+return Ast.BooleanExpression(true);
+end
+
+-- False Literal
+if(consume(self, TokenKind.Keyword, "false")) then
+return Ast.BooleanExpression(false);
+end
+
+-- Nil Literal
+if(consume(self, TokenKind.Keyword, "nil")) then
+return Ast.NilExpression();
+end
+
+-- Vararg Literal
+if(consume(self, TokenKind.Symbol, "...")) then
+return Ast.VarargExpression();
+end
+
+-- Variable
+if(is(self, TokenKind.Ident)) then
+local ident = get(self);
+local name = ident.value;
+
+local scope, id = scope:resolve(name);
+return Ast.VariableExpression(scope, id);
+end
+
+-- IfElse
+if(LuaVersion.LuaU) then
+if(consume(self, TokenKind.Keyword, "if")) then
+local condition = self:expression(scope);
+expect(self, TokenKind.Keyword, "then");
+local true_value = self:expression(scope);
+
+local elseifs = {}
+while(consume(self, TokenKind.Keyword, "elseif")) do
+local elseif_condition = self:expression(scope);
+expect(self, TokenKind.Keyword, "then");
+local elseif_value = self:expression(scope);
+
+table.insert(elseifs, {
+condition = elseif_condition,
+value = elseif_value
+});
+end
+
+expect(self, TokenKind.Keyword, "else");
+local false_value = self:expression(scope);
+
+return Ast.IfElseExpression(condition, true_value, elseifs, false_value);
+end
+end
+
+if(self.disableLog) then error() end
+logger:error(generateError(self, "Unexpected Token "" .. peek(self).source .. "". Expected a Expression!"))
+end
+
+function Parser:tableConstructor(scope)
+-- TODO: Parse Table Literals
+local entries = {};
+
+expect(self, TokenKind.Symbol, "{");
+
+while (not consume(self, TokenKind.Symbol, "}")) do
+if(consume(self, TokenKind.Symbol, "[")) then
+local key = self:expression(scope);
+expect(self, TokenKind.Symbol, "]");
+expect(self, TokenKind.Symbol, "=");
+local value = self:expression(scope);
+table.insert(entries, Ast.KeyedTableEntry(key, value));
+elseif(is(self, TokenKind.Ident, 0) and is(self, TokenKind.Symbol, "=", 1)) then
+local key = Ast.StringExpression(get(self).value);
+expect(self, TokenKind.Symbol, "=");
+local value = self:expression(scope);
+table.insert(entries, Ast.KeyedTableEntry(key, value));
+else
+local value = self:expression(scope);
+table.insert(entries, Ast.TableEntry(value));
+end
+
+if (not consume(self, TokenKind.Symbol, ";") and not consume(self, TokenKind.Symbol, ",") and not is(self, TokenKind.Symbol, "}")) then
+if self.disableLog then error() end
+logger:error(generateError(self, "expected a ";" or a ",""));
+end
+end
+
+return Ast.TableConstructorExpression(entries);
+end
+
+return Parser-- This Script is Part of the Prometheus Obfuscator by levno-710
+-- ast.lua
+-- This Script provides the Abstract Syntax Tree (AST) for Prometheus.
+
+local Ast = {}
+
+local AstKind = {
+-- Misc
+TopNode = "TopNode";
+Block = "Block";
+
+-- Statements
+ContinueStatement = "ContinueStatement";
+BreakStatement = "BreakStatement";
+DoStatement = "DoStatement";
+WhileStatement = "WhileStatement";
+ReturnStatement = "ReturnStatement";
+RepeatStatement = "RepeatStatement";
+ForInStatement = "ForInStatement";
+ForStatement = "ForStatement";
+IfStatement = "IfStatement";
+FunctionDeclaration = "FunctionDeclaration";
+LocalFunctionDeclaration = "LocalFunctionDeclaration";
+LocalVariableDeclaration = "LocalVariableDeclaration";
+FunctionCallStatement = "FunctionCallStatement";
+PassSelfFunctionCallStatement = "PassSelfFunctionCallStatement";
+AssignmentStatement = "AssignmentStatement";
+
+-- LuaU Compound Statements
+CompoundAddStatement = "CompoundAddStatement";
+CompoundSubStatement = "CompoundSubStatement";
+CompoundMulStatement = "CompoundMulStatement";
+CompoundDivStatement = "CompoundDivStatement";
+CompoundModStatement = "CompoundModStatement";
+CompoundPowStatement = "CompoundPowStatement";
+CompoundConcatStatement = "CompoundConcatStatement";
+
+-- Assignment Index
+AssignmentIndexing = "AssignmentIndexing";
+AssignmentVariable = "AssignmentVariable";
+
+-- Expression Nodes
+BooleanExpression = "BooleanExpression";
+NumberExpression = "NumberExpression";
+StringExpression = "StringExpression";
+NilExpression = "NilExpression";
+VarargExpression = "VarargExpression";
+OrExpression = "OrExpression";
+AndExpression = "AndExpression";
+LessThanExpression = "LessThanExpression";
+GreaterThanExpression = "GreaterThanExpression";
+LessThanOrEqualsExpression = "LessThanOrEqualsExpression";
+GreaterThanOrEqualsExpression = "GreaterThanOrEqualsExpression";
+NotEqualsExpression = "NotEqualsExpression";
+EqualsExpression = "EqualsExpression";
+StrCatExpression = "StrCatExpression";
+AddExpression = "AddExpression";
+SubExpression = "SubExpression";
+MulExpression = "MulExpression";
+DivExpression = "DivExpression";
+ModExpression = "ModExpression";
+NotExpression = "NotExpression";
+LenExpression = "LenExpression";
+NegateExpression = "NegateExpression";
+PowExpression = "PowExpression";
+IndexExpression = "IndexExpression";
+FunctionCallExpression = "FunctionCallExpression";
+PassSelfFunctionCallExpression = "PassSelfFunctionCallExpression";
+VariableExpression = "VariableExpression";
+FunctionLiteralExpression = "FunctionLiteralExpression";
+TableConstructorExpression = "TableConstructorExpression";
+
+-- Table Entry
+TableEntry = "TableEntry";
+KeyedTableEntry = "KeyedTableEntry";
+
+-- Misc
+NopStatement = "NopStatement";
+
+IfElseExpression = "IfElseExpression";
+}
+
+local astKindExpressionLookup = {
+[AstKind.BooleanExpression] = 0;
+[AstKind.NumberExpression] = 0;
+[AstKind.StringExpression] = 0;
+[AstKind.NilExpression] = 0;
+[AstKind.VarargExpression] = 0;
+[AstKind.OrExpression] = 12;
+[AstKind.AndExpression] = 11;
+[AstKind.LessThanExpression] = 10;
+[AstKind.GreaterThanExpression] = 10;
+[AstKind.LessThanOrEqualsExpression] = 10;
+[AstKind.GreaterThanOrEqualsExpression] = 10;
+[AstKind.NotEqualsExpression] = 10;
+[AstKind.EqualsExpression] = 10;
+[AstKind.StrCatExpression] = 9;
+[AstKind.AddExpression] = 8;
+[AstKind.SubExpression] = 8;
+[AstKind.MulExpression] = 7;
+[AstKind.DivExpression] = 7;
+[AstKind.ModExpression] = 7;
+[AstKind.NotExpression] = 5;
+[AstKind.LenExpression] = 5;
+[AstKind.NegateExpression] = 5;
+[AstKind.PowExpression] = 4;
+[AstKind.IndexExpression] = 1;
+[AstKind.AssignmentIndexing] = 1;
+[AstKind.FunctionCallExpression] = 2;
+[AstKind.PassSelfFunctionCallExpression] = 2;
+[AstKind.VariableExpression] = 0;
+[AstKind.AssignmentVariable] = 0;
+[AstKind.FunctionLiteralExpression] = 3;
+[AstKind.TableConstructorExpression] = 3;
+}
+
+Ast.AstKind = AstKind;
+
+function Ast.astKindExpressionToNumber(kind)
+return astKindExpressionLookup[kind] or 100;
+end
+
+function Ast.ConstantNode(val)
+if type(val) == "nil" then
+return Ast.NilExpression();
+end
+
+if type(val) == "string" then
+return Ast.StringExpression(val);
+end
+
+if type(val) == "number" then
+return Ast.NumberExpression(val);
+end
+
+if type(val) == "boolean" then
+return Ast.BooleanExpression(val);
+end
+end
+
+function Ast.NopStatement()
+return {
+kind = AstKind.NopStatement;
+}
+end
+
+function Ast.IfElseExpression(condition, true_value, elseifs, false_value)
+return {
+kind = AstKind.IfElseExpression,
+condition = condition,
+true_value = true_value,
+elseifs = elseifs,
+false_value = false_value
+}
+end
+
+-- Create Ast Top Node
+function Ast.TopNode(body, globalScope)
+return {
+kind = AstKind.TopNode,
+body = body,
+globalScope = globalScope,
+
+}
+end
+
+function Ast.TableEntry(value)
+return {
+kind = AstKind.TableEntry,
+value = value,
+
+}
+end
+
+function Ast.KeyedTableEntry(key, value)
+return {
+kind = AstKind.KeyedTableEntry,
+key = key,
+value = value,
+
+}
+end
+
+function Ast.TableConstructorExpression(entries)
+return {
+kind = AstKind.TableConstructorExpression,
+entries = entries,
+};
+end
+
+-- Create Statement Block
+function Ast.Block(statements, scope)
+return {
+kind = AstKind.Block,
+statements = statements,
+scope = scope,
+}
+end
+
+-- Create Break Statement
+function Ast.BreakStatement(loop, scope)
+return {
+kind = AstKind.BreakStatement,
+loop = loop,
+scope = scope,
+}
+end
+
+-- Create Continue Statement
+function Ast.ContinueStatement(loop, scope)
+return {
+kind = AstKind.ContinueStatement,
+loop = loop,
+scope = scope,
+}
+end
+
+function Ast.PassSelfFunctionCallStatement(base, passSelfFunctionName, args)
+return {
+kind = AstKind.PassSelfFunctionCallStatement,
+base = base,
+passSelfFunctionName = passSelfFunctionName,
+args = args,
+}
+end
+
+function Ast.AssignmentStatement(lhs, rhs)
+if(#lhs < 1) then
+print(debug.traceback());
+error("Something went wrong!");
+end
+return {
+kind = AstKind.AssignmentStatement,
+lhs = lhs,
+rhs = rhs,
+}
+end
+
+function Ast.CompoundAddStatement(lhs, rhs)
+return {
+kind = AstKind.CompoundAddStatement,
+lhs = lhs,
+rhs = rhs,
+}
+end
+
+function Ast.CompoundSubStatement(lhs, rhs)
+return {
+kind = AstKind.CompoundSubStatement,
+lhs = lhs,
+rhs = rhs,
+}
+end
+
+function Ast.CompoundMulStatement(lhs, rhs)
+return {
+kind = AstKind.CompoundMulStatement,
+lhs = lhs,
+rhs = rhs,
+}
+end
+
+function Ast.CompoundDivStatement(lhs, rhs)
+return {
+kind = AstKind.CompoundDivStatement,
+lhs = lhs,
+rhs = rhs,
+}
+end
+
+function Ast.CompoundPowStatement(lhs, rhs)
+return {
+kind = AstKind.CompoundPowStatement,
+lhs = lhs,
+rhs = rhs,
+}
+end
+
+function Ast.CompoundModStatement(lhs, rhs)
+return {
+kind = AstKind.CompoundModStatement,
+lhs = lhs,
+rhs = rhs,
+}
+end
+
+function Ast.CompoundConcatStatement(lhs, rhs)
+return {
+kind = AstKind.CompoundConcatStatement,
+lhs = lhs,
+rhs = rhs,
+}
+end
+
+function Ast.FunctionCallStatement(base, args)
+return {
+kind = AstKind.FunctionCallStatement,
+base = base,
+args = args,
+}
+end
+
+function Ast.ReturnStatement(args)
+return {
+kind = AstKind.ReturnStatement,
+args = args,
+}
+end
+
+function Ast.DoStatement(body)
+return {
+kind = AstKind.DoStatement,
+body = body,
+}
+end
+
+function Ast.WhileStatement(body, condition, parentScope)
+return {
+kind = AstKind.WhileStatement,
+body = body,
+condition = condition,
+parentScope = parentScope,
+}
+end
+
+function Ast.ForInStatement(scope, vars, expressions, body, parentScope)
+return {
+kind = AstKind.ForInStatement,
+scope = scope,
+ids = vars,
+vars = vars,
+expressions = expressions,
+body = body,
+parentScope = parentScope,
+}
+end
+
+function Ast.ForStatement(scope, id, initialValue, finalValue, incrementBy, body, parentScope)
+return {
+kind = AstKind.ForStatement,
+scope = scope,
+id = id,
+initialValue = initialValue,
+finalValue = finalValue,
+incrementBy = incrementBy,
+body = body,
+parentScope = parentScope,
+}
+end
+
+function Ast.RepeatStatement(condition, body, parentScope)
+return {
+kind = AstKind.RepeatStatement,
+body = body,
+condition = condition,
+parentScope = parentScope,
+}
+end
+
+function Ast.IfStatement(condition, body, elseifs, elsebody)
+return {
+kind = AstKind.IfStatement,
+condition = condition,
+body = body,
+elseifs = elseifs,
+elsebody = elsebody,
+}
+end
+
+function Ast.FunctionDeclaration(scope, id, indices, args, body)
+return {
+kind = AstKind.FunctionDeclaration,
+scope = scope,
+baseScope = scope,
+id = id,
+baseId = id,
+indices = indices,
+args = args,
+body = body,
+getName = function(self)
+return self.scope:getVariableName(self.id);
+end,
+}
+end
+
+function Ast.LocalFunctionDeclaration(scope, id, args, body)
+return {
+kind = AstKind.LocalFunctionDeclaration,
+scope = scope,
+id = id,
+args = args,
+body = body,
+getName = function(self)
+return self.scope:getVariableName(self.id);
+end,
+}
+end
+
+function Ast.LocalVariableDeclaration(scope, ids, expressions)
+return {
+kind = AstKind.LocalVariableDeclaration,
+scope = scope,
+ids = ids,
+expressions = expressions,
+}
+end
+
+function Ast.VarargExpression()
+return {
+kind = AstKind.VarargExpression;
+isConstant = false,
+}
+end
+
+function Ast.BooleanExpression(value)
+return {
+kind = AstKind.BooleanExpression,
+isConstant = true,
+value = value,
+}
+end
+
+function Ast.NilExpression()
+return {
+kind = AstKind.NilExpression,
+isConstant = true,
+value = nil,
+}
+end
+
+function Ast.NumberExpression(value)
+return {
+kind = AstKind.NumberExpression,
+isConstant = true,
+value = value,
+}
+end
+
+function Ast.StringExpression(value)
+return {
+kind = AstKind.StringExpression,
+isConstant = true,
+value = value,
+}
+end
+
+function Ast.OrExpression(lhs, rhs, simplify)
+if(simplify and rhs.isConstant and lhs.isConstant) then
+local success, val = pcall(function() return lhs.value or rhs.value end);
+if success then
+return Ast.ConstantNode(val);
+end
+end
+
+return {
+kind = AstKind.OrExpression,
+lhs = lhs,
+rhs = rhs,
+isConstant = false,
+}
+end
+
+function Ast.AndExpression(lhs, rhs, simplify)
+if(simplify and rhs.isConstant and lhs.isConstant) then
+local success, val = pcall(function() return lhs.value and rhs.value end);
+if success then
+return Ast.ConstantNode(val);
+end
+end
+
+return {
+kind = AstKind.AndExpression,
+lhs = lhs,
+rhs = rhs,
+isConstant = false,
+}
+end
+
+function Ast.LessThanExpression(lhs, rhs, simplify)
+if(simplify and rhs.isConstant and lhs.isConstant) then
+local success, val = pcall(function() return lhs.value < rhs.value end);
+if success then
+return Ast.ConstantNode(val);
+end
+end
+
+return {
+kind = AstKind.LessThanExpression,
+lhs = lhs,
+rhs = rhs,
+isConstant = false,
+}
+end
+
+function Ast.GreaterThanExpression(lhs, rhs, simplify)
+if(simplify and rhs.isConstant and lhs.isConstant) then
+local success, val = pcall(function() return lhs.value > rhs.value end);
+if success then
+return Ast.ConstantNode(val);
+end
+end
+
+return {
+kind = AstKind.GreaterThanExpression,
+lhs = lhs,
+rhs = rhs,
+isConstant = false,
+}
+end
+
+function Ast.LessThanOrEqualsExpression(lhs, rhs, simplify)
+if(simplify and rhs.isConstant and lhs.isConstant) then
+local success, val = pcall(function() return lhs.value <= rhs.value end);
+if success then
+return Ast.ConstantNode(val);
+end
+end
+
+return {
+kind = AstKind.LessThanOrEqualsExpression,
+lhs = lhs,
+rhs = rhs,
+isConstant = false,
+}
+end
+
+function Ast.GreaterThanOrEqualsExpression(lhs, rhs, simplify)
+if(simplify and rhs.isConstant and lhs.isConstant) then
+local success, val = pcall(function() return lhs.value >= rhs.value end);
+if success then
+return Ast.ConstantNode(val);
+end
+end
+
+return {
+kind = AstKind.GreaterThanOrEqualsExpression,
+lhs = lhs,
+rhs = rhs,
+isConstant = false,
+}
+end
+
+function Ast.NotEqualsExpression(lhs, rhs, simplify)
+if(simplify and rhs.isConstant and lhs.isConstant) then
+local success, val = pcall(function() return lhs.value ~= rhs.value end);
+if success then
+return Ast.ConstantNode(val);
+end
+end
+
+return {
+kind = AstKind.NotEqualsExpression,
+lhs = lhs,
+rhs = rhs,
+isConstant = false,
+}
+end
+
+function Ast.EqualsExpression(lhs, rhs, simplify)
+if(simplify and rhs.isConstant and lhs.isConstant) then
+local success, val = pcall(function() return lhs.value == rhs.value end);
+if success then
+return Ast.ConstantNode(val);
+end
+end
+
+return {
+kind = AstKind.EqualsExpression,
+lhs = lhs,
+rhs = rhs,
+isConstant = false,
+}
+end
+
+function Ast.StrCatExpression(lhs, rhs, simplify)
+if(simplify and rhs.isConstant and lhs.isConstant) then
+local success, val = pcall(function() return lhs.value .. rhs.value end);
+if success then
+return Ast.ConstantNode(val);
+end
+end
+
+return {
+kind = AstKind.StrCatExpression,
+lhs = lhs,
+rhs = rhs,
+isConstant = false,
+}
+end
+
+function Ast.AddExpression(lhs, rhs, simplify)
+if(simplify and rhs.isConstant and lhs.isConstant) then
+local success, val = pcall(function() return lhs.value + rhs.value end);
+if success then
+return Ast.ConstantNode(val);
+end
+end
+
+return {
+kind = AstKind.AddExpression,
+lhs = lhs,
+rhs = rhs,
+isConstant = false,
+}
+end
+
+function Ast.SubExpression(lhs, rhs, simplify)
+if(simplify and rhs.isConstant and lhs.isConstant) then
+local success, val = pcall(function() return lhs.value - rhs.value end);
+if success then
+return Ast.ConstantNode(val);
+end
+end
+
+return {
+kind = AstKind.SubExpression,
+lhs = lhs,
+rhs = rhs,
+isConstant = false,
+}
+end
+
+function Ast.MulExpression(lhs, rhs, simplify)
+if(simplify and rhs.isConstant and lhs.isConstant) then
+local success, val = pcall(function() return lhs.value * rhs.value end);
+if success then
+return Ast.ConstantNode(val);
+end
+end
+
+return {
+kind = AstKind.MulExpression,
+lhs = lhs,
+rhs = rhs,
+isConstant = false,
+}
+end
+
+function Ast.DivExpression(lhs, rhs, simplify)
+if(simplify and rhs.isConstant and lhs.isConstant and rhs.value ~= 0) then
+local success, val = pcall(function() return lhs.value / rhs.value end);
+if success then
+return Ast.ConstantNode(val);
+end
+end
+
+return {
+kind = AstKind.DivExpression,
+lhs = lhs,
+rhs = rhs,
+isConstant = false,
+}
+end
+
+function Ast.ModExpression(lhs, rhs, simplify)
+if(simplify and rhs.isConstant and lhs.isConstant) then
+local success, val = pcall(function() return lhs.value % rhs.value end);
+if success then
+return Ast.ConstantNode(val);
+end
+end
+
+return {
+kind = AstKind.ModExpression,
+lhs = lhs,
+rhs = rhs,
+isConstant = false,
+}
+end
+
+function Ast.NotExpression(rhs, simplify)
+if(simplify and rhs.isConstant) then
+local success, val = pcall(function() return not rhs.value end);
+if success then
+return Ast.ConstantNode(val);
+end
+end
+
+return {
+kind = AstKind.NotExpression,
+rhs = rhs,
+isConstant = false,
+}
+end
+
+function Ast.NegateExpression(rhs, simplify)
+if(simplify and rhs.isConstant) then
+local success, val = pcall(function() return -rhs.value end);
+if success then
+return Ast.ConstantNode(val);
+end
+end
+
+return {
+kind = AstKind.NegateExpression,
+rhs = rhs,
+isConstant = false,
+}
+end
+
+function Ast.LenExpression(rhs, simplify)
+if(simplify and rhs.isConstant) then
+local success, val = pcall(function() return #rhs.value end);
+if success then
+return Ast.ConstantNode(val);
+end
+end
+
+return {
+kind = AstKind.LenExpression,
+rhs = rhs,
+isConstant = false,
+}
+end
+
+function Ast.PowExpression(lhs, rhs, simplify)
+if(simplify and rhs.isConstant and lhs.isConstant) then
+local success, val = pcall(function() return lhs.value ^ rhs.value end);
+if success then
+return Ast.ConstantNode(val);
+end
+end
+
+return {
+kind = AstKind.PowExpression,
+lhs = lhs,
+rhs = rhs,
+isConstant = false,
+}
+end
+
+function Ast.IndexExpression(base, index)
+return {
+kind = AstKind.IndexExpression,
+base = base,
+index = index,
+isConstant = false,
+}
+end
+
+function Ast.AssignmentIndexing(base, index)
+return {
+kind = AstKind.AssignmentIndexing,
+base = base,
+index = index,
+isConstant = false,
+}
+end
+
+function Ast.PassSelfFunctionCallExpression(base, passSelfFunctionName, args)
+return {
+kind = AstKind.PassSelfFunctionCallExpression,
+base = base,
+passSelfFunctionName = passSelfFunctionName,
+args = args,
+
+}
+end
+
+function Ast.FunctionCallExpression(base, args)
+return {
+kind = AstKind.FunctionCallExpression,
+base = base,
+args = args,
+}
+end
+
+function Ast.VariableExpression(scope, id)
+scope:addReference(id);
+return {
+kind = AstKind.VariableExpression,
+scope = scope,
+id = id,
+getName = function(self)
+return self.scope.getVariableName(self.id);
+end,
+}
+end
+
+function Ast.AssignmentVariable(scope, id)
+scope:addReference(id);
+return {
+kind = AstKind.AssignmentVariable,
+scope = scope,
+id = id,
+getName = function(self)
+return self.scope.getVariableName(self.id);
+end,
+}
+end
+
+function Ast.FunctionLiteralExpression(args, body)
+return {
+kind = AstKind.FunctionLiteralExpression,
+args = args,
+body = body,
+}
+end
+
+return Ast;
